@@ -1,0 +1,18 @@
+# repozytorium zawiera tylko kod programu — dane z pracy zostają na dysku
+*
+!.gitignore
+!README.md
+!translate_mkv.py
+!audio_tools.py
+!ui_en.py
+!requirements.txt
+!install_audio.bat
+!tlumacz.bat
+!unraid/
+!unraid/Dockerfile
+!unraid/zainstaluj.sh
+!unraid/ustawienia.sh
+!.gitattributes
+# kopie programu dla serwera powstają przy wgrywaniu (README)
+unraid/translate_mkv.py
+unraid/ui_en.py

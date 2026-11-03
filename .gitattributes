@@ -1,0 +1,4 @@
+# skrypty dla Unraid (Linux) muszą mieć końce linii LF
+*.sh text eol=lf
+unraid/Dockerfile text eol=lf
+*.bat text eol=crlf

@@ -1,0 +1,5 @@
+# Program główny (translate_mkv.py) działa na samej bibliotece standardowej Pythona.
+# Opcjonalne silniki tłumaczenia:
+deep-translator   # --engine google
+anthropic         # --engine claude
+# Narzędzia audio (Whisper, GigaAM, Demucs, Piper, XTTS) instaluje install_audio.bat w środowisku audio_env.
