@@ -367,4 +367,6 @@ EN = {
     'zapętlenia': 'loops',
     'długość': 'length',
     'Ma już napisy': 'Already subtitled',
+    'nie udało się sprawdzić języka mowy ({0}) — zostaje oznaczenie ścieżki': "could not check the speech language ({0}) — keeping the track's language tag",
+    'ścieżka oznaczona „{0}”, rozpoznana mowa: {1} — używam rozpoznanego języka': 'track tagged "{0}", detected speech: {1} — using the detected language',
 }

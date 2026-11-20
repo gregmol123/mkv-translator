@@ -1678,12 +1678,21 @@ def transcribe(mkv, audio, args, tmp):
             raise FatalError(tr('plik nie ma ścieżki dźwiękowej'))
         wav = Path(tmp) / "audio.wav"
         src, lang = main_audio(audio, source)
-        if lang_of(audio[src]) in target_tags():
-            raise FatalError(tr('plik ma dźwięk tylko w języku docelowym — nie ma obcej mowy do rozpoznania'))
-        if lang is None and source != "auto":
+        if source == "auto":
+            # znacznik języka bywa błędny (rosyjskie seriale oznaczone "eng") — decyduje próbka mowy
+            tagged = lang
+            try:
+                lang = detect_speech_language(mkv, src, tmp)
+            except FatalError as e:
+                if tagged is None:
+                    raise
+                print(tr('    nie udało się sprawdzić języka mowy ({0}) — zostaje oznaczenie ścieżki', e))
+                lang = tagged
+            if tagged and tagged != lang:
+                print(tr('    ścieżka oznaczona „{0}”, rozpoznana mowa: {1} — używam rozpoznanego języka',
+                         lang_of(audio[src]), LANGS[lang][0]))
+        elif lang is None:
             lang = source
-        if lang is None:
-            lang = detect_speech_language(mkv, src, tmp)
         if lang == OUT["code"]:
             raise FatalError(tr('mowa jest już w języku docelowym'))
         asr = args.asr if lang == "ru" else "whisper"
