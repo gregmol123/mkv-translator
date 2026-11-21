@@ -1,16 +1,17 @@
 # Plan prac — MKV Translator
 
-Stan na 21.11.2026, 14:45. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
+Stan na 21.11.2026, 15:33. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
 
 ## Zrobione
 
 - [x] Raport „Ulepszenia MKV Translatora” (badania + opinia Qwena + audyt kodu) — reports/Ulepszenia MKV Translatora.md
 - [x] CHANGELOG.md, CONTRIBUTING.md, docs/ARCHITEKTURA.md
 - [x] Wersja 1.1: język mowy z próbki dźwięku zamiast z oznaczenia ścieżki — GitHub v1.1
+- [x] Z1: zaczynamy od Etapu 1 (szybkie poprawki); A4 czeka na decyzję Z3 — 21.11
+- [x] Etap 1 bez A4 zrobiony (A1–A3, A5–A12): filtr halucynacji, flagi ścieżek, zapis atomowy, pamięć karty, limity czasu, ślad błędów, język z 8 próbek (Shef 01: ru 92%), słowniczek w poleceniu, schemat JSON, tempo 17/20 zn/s, kanał centralny do Demucsa; testy OK, .exe przebudowany, bez wydania — 21.11
 
 ## Do decyzji (Ty)
 
-- [ ] **Z1** Od którego etapu zaczynamy: 1 (szybkie poprawki, bez pomiarów) czy od razu B1 (zestaw wzorcowy) — 2 min Twoje
 - [ ] **Z2** Zestaw wzorcowy B1: wskaż 5–10 filmów/odcinków z oryginalnymi rosyjskimi napisami (posłużą za wzorzec do mierzenia rozpoznawania mowy) — 15 min Twoje
 - [ ] **Z3** Kopia oryginału .orig.mkv przy podmianie (A4): ile dni trzymać i na których dyskach — zajmuje tyle miejsca co film — 2 min Twoje
 - [ ] **Z4** Licencja repozytorium na GitHubie (np. MIT) — bez niej inni nie mogą legalnie używać kodu — 2 min Twoje
@@ -20,18 +21,18 @@ Stan na 21.11.2026, 14:45. Źródło: raport `reports/Ulepszenia MKV Translatora
 
 _ok. 1 dzień mojej pracy, bez pomiarów_
 
-- [ ] **A1** Filtr halucynacji Whispera: czarna lista RU/EN („Субтитры сделал…”, „Продолжение следует”), usuwanie powtórzeń, odrzucanie przy niskiej pewności — S
-- [ ] **A2** Podmiana MKV zachowuje flagi ścieżek (forced, hearing_impaired); check_remux porównuje flagi, załączniki i tagi — S
-- [ ] **A3** Zapis atomowy .tmp + os.replace dla napisów; metadane silnik/model/język przy rozpoznanym SRT — S
+- [x] **A1** Filtr halucynacji Whispera: czarna lista RU/EN („Субтитры сделал…”, „Продолжение следует”), usuwanie powtórzeń, odrzucanie przy niskiej pewności — S
+- [x] **A2** Podmiana MKV zachowuje flagi ścieżek (forced, hearing_impaired); check_remux porównuje flagi, załączniki i tagi — S
+- [x] **A3** Zapis atomowy .tmp + os.replace dla napisów; metadane silnik/model/język przy rozpoznanym SRT — S
 - [ ] **A4** Opcjonalna kopia .orig.mkv przez N dni (po decyzji Z3) — S
-- [ ] **A5** Zwalnianie modeli rozpoznawania mowy z karty przed tłumaczeniem; keep_alive=0 w Ollamie przed rozpoznawaniem — S
-- [ ] **A6** Limity czasu ffmpeg/ffprobe i procesu audio (Stop zawsze działa), bez ponawiania przy braku pamięci — S/M
-- [ ] **A7** Pełny ślad błędu do dziennik.txt — S
-- [ ] **A8** Wykrywanie języka mowy z 6–8 okien rozłożonych po filmie (dziś realnie decyduje ~30 s), kanał centralny, głosowanie — S/M
-- [ ] **A9** Słowniczek imion w prompcie tłumaczenia i jako podpowiedzi dla Whispera — S
-- [ ] **A10** Schemat JSON (format) w Ollamie, num_ctx 16k, większe partie — S
-- [ ] **A11** Tempo czytania wg norm Netflix PL: ostrzeżenie powyżej 17 zn/s, błąd powyżej 20 — S
-- [ ] **A12** 5.1: kanał centralny także przy separacji głosu; dziennik mówi, której ścieżki i kanałów użyto — S
+- [x] **A5** Zwalnianie modeli rozpoznawania mowy z karty przed tłumaczeniem; keep_alive=0 w Ollamie przed rozpoznawaniem — S
+- [x] **A6** Limity czasu ffmpeg/ffprobe i procesu audio (Stop zawsze działa), bez ponawiania przy braku pamięci — S/M
+- [x] **A7** Pełny ślad błędu do dziennik.txt — S
+- [x] **A8** Wykrywanie języka mowy z 6–8 okien rozłożonych po filmie (dziś realnie decyduje ~30 s), kanał centralny, głosowanie — S/M
+- [x] **A9** Słowniczek imion w prompcie tłumaczenia i jako podpowiedzi dla Whispera — S
+- [x] **A10** Schemat JSON (format) w Ollamie, num_ctx 16k, większe partie — S
+- [x] **A11** Tempo czytania wg norm Netflix PL: ostrzeżenie powyżej 17 zn/s, błąd powyżej 20 — S
+- [x] **A12** 5.1: kanał centralny także przy separacji głosu; dziennik mówi, której ścieżki i kanałów użyto — S
 
 ## Etap 2 – perfekcyjne rozpoznawanie mowy
 

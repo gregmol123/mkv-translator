@@ -98,6 +98,37 @@ def srt_time(seconds):
     return f"{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02},{ms % 1000:03}"
 
 
+# ---------------------------------------------------------------- halucynacje
+
+# typowe "napisy-widma" Whispera (wyuczone z napisów w filmach z YouTube): pojawiają się w ciszy i przy muzyce
+HALLUCINATION_RE = re.compile(
+    r"субтитр\w*\s+(сделал|создавал|подготовил|делал)|редактор\s+субтитров|корректор\s+[А-ЯЁ]"
+    r"|продолжение\s+следует|спасибо\s+за\s+просмотр|подписывайтесь\s+на\s+канал|ставьте\s+лайк"
+    r"|dimatorzok|amara\.org|thanks?\s+(you\s+)?for\s+watching|subtitles?\s+by|please\s+subscribe"
+    r"|like\s+and\s+subscribe|translated\s+by|transcript\s+by|www\.\S+\.(com|ru|org)",
+    re.IGNORECASE)
+MAX_REPEATS = 2                               # ta sama kwestia więcej razy z rzędu to zapętlenie, nie dialog
+
+
+def drop_hallucinations(cues):
+    """Usuwa napisy-widma, zapętlenia (ta sama kwestia > MAX_REPEATS razy z rzędu) i kwestie o bardzo
+    niskiej pewności. cues: (start, koniec, tekst[, pewność]); zwraca (start, koniec, tekst) i liczbę usuniętych."""
+    out, dropped, last, run = [], 0, None, 0
+    for cue in cues:
+        start, end, text = cue[:3]
+        confidence = cue[3] if len(cue) > 3 else None
+        key = re.sub(r"\W+", " ", text.lower()).strip()
+        run = run + 1 if key and key == last else 1
+        last = key
+        # krótkie powtórki ("Да.", "Нет!") bywają prawdziwym dialogiem — zapętlenie liczy się dla dłuższych zdań
+        looped = run > MAX_REPEATS and len(key) >= 12
+        if HALLUCINATION_RE.search(text) or looped or confidence is not None and confidence < 0.3:
+            dropped += 1
+            continue
+        out.append((start, end, text))
+    return out, dropped
+
+
 # ---------------------------------------------------------------- Whisper
 
 def split_segment(words):
@@ -189,8 +220,15 @@ def whisper_cues(audio, args, device):
         hallucination_silence_threshold=2.0)
     cues = []
     for seg in segments:
-        cues += split_segment(seg.words) if seg.words else [(seg.start, seg.end, seg.text.strip())]
-        print(tr('\r    rozpoznawanie mowy: {0}%', min(100, round(100 * seg.end / info.duration))), end="", flush=True)
+        # pewność fragmentu: średnie prawdopodobieństwo słów, a gdy go brak — z avg_logprob
+        probs = [w.probability for w in seg.words or [] if w.probability is not None]
+        confidence = sum(probs) / len(probs) if probs else 2.718 ** seg.avg_logprob
+        if seg.avg_logprob < -1.0 and confidence < 0.4:
+            confidence = 0.0                  # niska pewność dekodera i słów naraz — prawie zawsze widmo
+        parts = split_segment(seg.words) if seg.words else [(seg.start, seg.end, seg.text.strip())]
+        cues += [(*p, confidence) for p in parts]
+        done = round(100 * seg.end / info.duration) if info.duration else 100
+        print(tr('\r    rozpoznawanie mowy: {0}%', min(100, done)), end="", flush=True)
     print()
     return cues
 
@@ -270,10 +308,14 @@ def transcribe(args):
             print(tr('    GigaAM nie działa — rozpoznaję mowę Whisperem'), flush=True)
     if cues is None:
         cues = whisper_cues(audio, args, device)
-    cues = [c for c in cues if c[2]]
-    with open(args.out, "w", encoding="utf-8") as f:
+    cues, dropped = drop_hallucinations([c for c in cues if c[2]])
+    if dropped:
+        print(tr('    usunięto {0} kwestii-widm (napisy z YouTube, zapętlenia, bardzo niska pewność)', dropped))
+    tmp = Path(args.out + ".tmp")              # zapis atomowy: przerwany nie zostawia niepełnego pliku
+    with open(tmp, "w", encoding="utf-8") as f:
         for i, (start, end, text) in enumerate(cues, 1):
             f.write(f"{i}\n{srt_time(start)} --> {srt_time(end)}\n{text}\n\n")
+    os.replace(tmp, args.out)
     print(tr('    rozpoznano {0} kwestii', len(cues)))
 
 
@@ -284,9 +326,24 @@ def detect(args):
     if rate != 16000 or audio.shape[1] != 1:
         sys.exit("Oczekiwano pliku WAV 16 kHz mono.")
     model = whisper_model(args.model, device)
-    lang, prob, _ = model.detect_language(audio[:, 0], vad_filter=True, language_detection_segments=4)
-    Path(args.out).write_text(f"{lang} {prob:.3f}", encoding="utf-8")
-    print(tr('    rozpoznany język mowy: {0} (pewność {1:.0%})', lang, prob))
+    audio = audio[:, 0]
+    window = 16000 * 30
+    # każda 30-sekundowa próbka głosuje swoim językiem z wagą pewności; wynik: język i jego udział w głosach
+    votes = {}
+    for pos in range(0, max(1, len(audio) - window // 3), window):
+        chunk = audio[pos:pos + window]
+        try:
+            lang, prob, _ = model.detect_language(chunk, vad_filter=True, language_detection_segments=1)
+        except Exception:                     # próbka bez mowy (cisza, sama muzyka) nie głosuje
+            continue
+        votes[lang] = votes.get(lang, 0.0) + prob
+    if not votes:
+        sys.exit(tr("w próbkach dźwięku nie wykryto mowy"))
+    lang = max(votes, key=votes.get)
+    share = votes[lang] / sum(votes.values())
+    Path(args.out).write_text(f"{lang} {share:.3f}", encoding="utf-8")
+    summary = ", ".join(f"{k} {v / sum(votes.values()):.0%}" for k, v in sorted(votes.items(), key=lambda kv: -kv[1])[:3])
+    print(tr('    rozpoznany język mowy: {0} (pewność {1:.0%}; głosy: {2})', lang, share, summary))
 
 
 # ---------------------------------------------------------------- OCR napisów graficznych (PGS z Blu-ray)
@@ -685,6 +742,21 @@ def tts(args):
     print(tr('    lektor: {0} kwestii, przyspieszono {1}', len(cues), sped))
 
 
+def free(args=None):
+    """Zwalnia modele z pamięci karty — przed tłumaczeniem dużym modelem w Ollamie (proces zostaje)."""
+    if not _models:
+        return
+    _models.clear()
+    import gc
+    gc.collect()
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except ImportError:
+        pass
+    print(tr('    modele audio zwolnione z pamięci karty'), flush=True)
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -711,7 +783,9 @@ def main():
     d.add_argument("audio")
     d.add_argument("out")
     d.add_argument("--model", default=WHISPER_MODEL)
+    d.add_argument("--windows", type=int, default=1, help=tr('ile 30-sekundowych próbek zawiera plik (informacyjnie)'))
     sub.add_parser("check")
+    sub.add_parser("free", help=tr('zwolnij modele z pamięci karty (tryb serve)'))
     sub.add_parser("serve", help=tr('praca ciągła: polecenia (JSON, po jednym w wierszu) czytane z wejścia, modele zostają w pamięci między plikami'))
     args = ap.parse_args()
     if args.cmd == "serve":
@@ -736,9 +810,9 @@ def serve(ap):
             argv = json.loads(line)
             sys.argv = [sys.argv[0], *argv]   # do opisu w audio_blad.txt
             args = ap.parse_args(argv)
-            if args.cmd not in ("transcribe", "tts", "detect", "ocr"):
+            if args.cmd not in ("transcribe", "tts", "detect", "ocr", "free"):
                 raise ValueError(tr('polecenie {0} nie działa w trybie serve', args.cmd))
-            {"transcribe": transcribe, "tts": tts, "detect": detect, "ocr": ocr}[args.cmd](args)
+            {"transcribe": transcribe, "tts": tts, "detect": detect, "ocr": ocr, "free": free}[args.cmd](args)
         except SystemExit as e:               # sys.exit("opis") w poleceniach i błędy argparse
             if e.code not in (None, 0):
                 code, message = 1, str(e.code)

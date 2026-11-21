@@ -10,6 +10,7 @@ import argparse
 import copy
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -154,10 +155,29 @@ def gemma_prompt(text, lang):
                                         tname=TARGETS[OUT["code"]][0], tcode=OUT["code"])
 
 
-def system_prompt(lang):
+def system_prompt(lang, names=None):
+    """Polecenie dla modelu; names: ustalona pisownia imion serialu (słowniczek) jako {rdzeń z oryginału: zapis}."""
     if OUT["code"] == "pl":
-        return SYSTEM_PROMPT.format(source=LANGS[lang][1])
-    return SYSTEM_PROMPT_EN.format(source=LANGS[lang][0])
+        text = SYSTEM_PROMPT.format(source=LANGS[lang][1])
+        head = "Ustalona pisownia imion i nazw w tym serialu (rdzeń z oryginału -> zapis; odmieniaj po polsku):"
+    else:
+        text = SYSTEM_PROMPT_EN.format(source=LANGS[lang][0])
+        head = "Established spelling of names in this series (source stem -> spelling):"
+    if names:
+        text += "\n\n" + head + "\n" + "\n".join(f"- {k} -> {v}" for k, v in names.items())
+    return text
+
+
+GLOSSARY_PROMPT_LIMIT = 80                   # tyle imion najwyżej trafia do polecenia (krótszy prompt = szybciej)
+
+
+def glossary_prompt_names(path):
+    """Imiona do polecenia: zablokowane przez użytkownika i te, które w serialu padły co najmniej 2 razy."""
+    names = load_glossary(path) if path else {}
+    picked = [(k, e) for k, e in names.items()
+              if e.get("pisownia") and (e.get("zablokuj") or sum(e.get("warianty", {}).values()) >= 2)]
+    picked.sort(key=lambda ke: (not ke[1].get("zablokuj"), -sum(ke[1].get("warianty", {}).values())))
+    return {k: e["pisownia"] for k, e in picked[:GLOSSARY_PROMPT_LIMIT]}
 
 
 # częste słowa angielskie, których nie ma w polszczyźnie (bez "to", "do", "i" — są też polskie)
@@ -227,10 +247,17 @@ class Cue:
 
 # ---------------------------------------------------------------- ffmpeg
 
-def run(cmd):
-    # CREATE_NO_WINDOW: w wersji okienkowej ffmpeg nie może otwierać własnych konsol
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+def run(cmd, timeout=None):
+    """ffmpeg/ffprobe z limitem czasu: zawieszony dysk sieciowy albo uszkodzony plik nie blokuje kolejki na zawsze."""
+    if timeout is None:
+        timeout = 300 if cmd[0] == "ffprobe" else 6 * 3600
+    try:
+        # CREATE_NO_WINDOW: w wersji okienkowej ffmpeg nie może otwierać własnych konsol
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        raise FatalError(tr('{0} nie skończył pracy w {1} min — przerwany (plik albo dysk nie odpowiada)',
+                            cmd[0], round(timeout / 60)))
 
 
 def probe_streams(mkv, kind):
@@ -259,6 +286,7 @@ def main_audio(audio, source="ru"):
     return found, None
 
 
+HELPER_SILENCE = 30 * 60                     # tyle wolno procesowi audio milczeć (wczytywanie modeli to minuty)
 HELPER_END = "\x1eKONIEC"                    # znacznik końca polecenia w trybie "serve" (jak w audio_tools.py)
 _helper = {"proc": None, "errors": None}     # stały proces audio_tools.py serve — modele zostają w pamięci karty
 _helper_lock = threading.Lock()
@@ -280,13 +308,40 @@ def stop_helper():
         proc.kill()
 
 
+def free_helper():
+    """Zwalnia pamięć karty zajętą przez modele audio (proces zostaje) — przed tłumaczeniem dużym modelem."""
+    proc = _helper["proc"]
+    if proc and proc.poll() is None:
+        try:
+            run_helper(["free"])
+        except (FatalError, ToolDown):
+            stop_helper()
+
+
+def ollama_unload():
+    """Wyładowuje modele Ollamy z karty (keep_alive=0), żeby rozpoznawanie mowy miało całą pamięć.
+    Tylko dla Ollamy na tym komputerze — zdalna nie zajmuje tej karty."""
+    if not ollama_is_local():
+        return
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_URL}/api/ps", timeout=5) as r:
+            loaded = [m["name"] for m in json.load(r).get("models", [])]
+        for name in loaded:
+            body = json.dumps({"model": name, "keep_alive": 0}).encode("utf-8")
+            req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=body,
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=60).read()
+    except (urllib.error.URLError, OSError, ValueError):
+        pass                                  # Ollama wyłączona albo starsza — nic do zwolnienia
+
+
 def run_helper(args):
     """Uruchamia polecenie audio_tools.py i przekazuje jego komunikaty na bieżąco.
 
     Rozpoznawanie mowy i lektor idą przez stały proces (tryb "serve"): Demucs, GigaAM i głosy wczytują się
     raz na całą kolejkę zamiast przy każdym pliku. MKV_AUDIO_PERSIST=0 wyłącza ten tryb.
     """
-    if args[0] in ("transcribe", "tts", "detect", "ocr") and os.environ.get("MKV_AUDIO_PERSIST", "1") != "0":
+    if args[0] in ("transcribe", "tts", "detect", "ocr", "free") and os.environ.get("MKV_AUDIO_PERSIST", "1") != "0":
         with _helper_lock:
             return run_persistent(args)
     base, env = helper_command()
@@ -326,7 +381,17 @@ def run_persistent(args):
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         errors = collections.deque(maxlen=80)   # stderr trzeba czytać na bieżąco, inaczej proces stanie
         threading.Thread(target=lambda: errors.extend(proc.stderr), daemon=True).start()
-        _helper.update(proc=proc, errors=errors)
+        # stdout czyta osobny wątek: główna pętla co sekundę sprawdza Stop, nawet gdy proces długo milczy
+        chunks = queue.Queue()
+
+        def pump(out=proc.stdout, q=chunks):
+            while True:
+                chunk = out.read1(4096)
+                q.put(chunk)
+                if not chunk:
+                    return
+        threading.Thread(target=pump, daemon=True).start()
+        _helper.update(proc=proc, errors=errors, chunks=chunks)
     _helper["errors"].clear()                 # opis błędu ma dotyczyć tego polecenia, nie poprzednich
     try:
         proc.stdin.write((json.dumps([str(a) for a in args]) + "\n").encode("utf-8"))
@@ -336,8 +401,19 @@ def run_persistent(args):
         raise ToolDown(tr('proces narzędzi audio przestał działać — spróbuj ponownie'))
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     pending = ""
+    quiet_since = time.time()
     while True:
-        chunk = proc.stdout.read1(4096)
+        try:
+            chunk = _helper["chunks"].get(timeout=1)
+        except queue.Empty:
+            if cancel.is_set():
+                stop_helper()
+                raise Cancelled
+            if time.time() - quiet_since > HELPER_SILENCE:
+                stop_helper()
+                raise ToolDown(tr('proces narzędzi audio nie odpowiada od {0} min — zatrzymany', HELPER_SILENCE // 60))
+            continue
+        quiet_since = time.time()
         if not chunk:                         # proces padł (np. błąd przy imporcie bibliotek)
             stop_helper()
             time.sleep(0.5)                   # wątek czytający stderr dobiera ostatnie wiersze
@@ -398,7 +474,9 @@ def mux(mkv, out_path, srt=None, sub_count=0, voice=None, audio=(), replace_audi
         cmd += ["-i", str(srt)]
         n = str(sub_count - len(drop_subs))  # indeks nowej ścieżki wśród napisów
         maps += ["-map", f"{inputs}:0"]
-        opts += ["-disposition:s", "0", f"-disposition:s:{n}", "0" if voice else "default",
+        # dotychczasowym ścieżkom zdejmujemy tylko "domyślną" — "wymuszone" i "dla niesłyszących" zostają
+        opts += [x for i in range(int(n)) for x in (f"-disposition:s:{i}", "-default")]
+        opts += [f"-disposition:s:{n}", "0" if voice else "default",
                  f"-metadata:s:s:{n}", f"language={TARGETS[OUT['code']][4]}",
                  f"-metadata:s:s:{n}", f"title={TARGETS[OUT['code']][3]}"]
         inputs += 1
@@ -414,7 +492,8 @@ def mux(mkv, out_path, srt=None, sub_count=0, voice=None, audio=(), replace_audi
             maps += ["-map", "-0:a"]
         n = "0" if replace_audio else str(len(audio) - len(drop_audio))
         maps += ["-map", "[lektor]"]
-        opts += [f"-c:a:{n}", "aac", f"-b:a:{n}", "192k", "-disposition:a", "0", f"-disposition:a:{n}", "default",
+        opts += [x for i in range(int(n)) for x in (f"-disposition:a:{i}", "-default")]
+        opts += [f"-c:a:{n}", "aac", f"-b:a:{n}", "192k", f"-disposition:a:{n}", "default",
                  f"-metadata:s:a:{n}", "language=pol", f"-metadata:s:a:{n}", "title=Polski lektor"]
     res = run(cmd + maps + opts + [str(out_path)])
     if res.returncode != 0:
@@ -439,9 +518,13 @@ def parse_srt(text):
 
 
 def write_srt(cues, path):
-    with open(path, "w", encoding="utf-8-sig", newline="\r\n") as f:
+    """Zapis przez plik tymczasowy: przerwany zapis nie zostawia niepełnych napisów pod docelową nazwą."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8-sig", newline="\r\n") as f:
         for i, cue in enumerate(cues, 1):
             f.write(f"{i}\n{cue.start} --> {cue.end}{cue.extra}\n{cue.text}\n\n")
+    os.replace(tmp, path)
 
 
 def cyrillic_ratio(text):
@@ -627,19 +710,23 @@ class OllamaEngine:
     batch_size = 30
     parallel = 2             # ile partii tłumaczyć naraz (sens ma do wartości OLLAMA_NUM_PARALLEL)
     lang = "ru"              # język źródłowy bieżącego pliku (ustawia process())
+    names = None             # pisownia imion serialu do polecenia (ustawia translate_cues())
 
     def __init__(self, model):
         self.model = model
         self.name = f"Ollama ({model})"
         self.line_mode = "translategemma" in model.lower()
         self.think_off = not self.line_mode
+        self.use_format = True
         names = ensure_ollama()
         if model not in names and f"{model}:latest" not in names:
             raise OllamaDown(tr("Ollama nie ma modelu '{0}'. Dostępne: {1}", model, ', '.join(names)))
 
-    def _chat(self, messages, attempt=1):
+    def _chat(self, messages, attempt=1, fmt=None):
         body = {"model": self.model, "messages": messages, "stream": False,
                 "options": {"num_ctx": 8192}}  # temperatura domyślna: obniżona zapętla gemma4
+        if fmt is not None and self.use_format:
+            body["format"] = fmt
         if self.think_off:
             body["think"] = False             # bez "myślenia" tłumaczenie jest wielokrotnie szybsze
         req = urllib.request.Request(f"{OLLAMA_URL}/api/chat", data=json.dumps(body).encode("utf-8"),
@@ -651,6 +738,9 @@ class OllamaEngine:
             detail = e.read().decode("utf-8", "replace")[:300]
             if self.think_off and "think" in detail.lower():
                 self.think_off = False        # model nie zna tego parametru
+                return self._chat(messages, fmt=fmt)
+            if fmt is not None and "format" in detail.lower():
+                self.use_format = False       # starsza Ollama bez schematów odpowiedzi
                 return self._chat(messages)
             if e.code >= 500 and attempt < 4:  # np. losowe zapętlenie modelu ("token repeat limit")
                 return self._chat(messages, attempt + 1)
@@ -722,11 +812,14 @@ class OllamaEngine:
         if self.line_mode:
             return self._marked(texts) if len(texts) > 1 else [" ".join(self._lines(texts[0]))]
         if not self.line_mode:
-            messages = [{"role": "system", "content": system_prompt(self.lang)},
+            messages = [{"role": "system", "content": system_prompt(self.lang, self.names)},
                         {"role": "user", "content": json_payload(texts, context)}]
+            # schemat odpowiedzi: Ollama wymusza dokładnie klucze "1".."n" — mniej zgubionych kwestii i ponowień
+            schema = {"type": "object", "properties": {str(i): {"type": "string"} for i in range(1, len(texts) + 1)},
+                      "required": [str(i) for i in range(1, len(texts) + 1)]}
             for _ in range(2):
                 try:
-                    return parse_json_reply(self._chat(messages), len(texts))
+                    return parse_json_reply(self._chat(messages, fmt=schema), len(texts))
                 except (ValueError, KeyError, AttributeError):
                     continue
         return self._split(texts)
@@ -1047,17 +1140,22 @@ def cue_cps(cue):
     return len(text) / seconds if seconds > 0 else 0
 
 
+CPS_WARN, CPS_MAX = 17, 20                    # tempo czytania: norma Netflix PL dla dorosłych / granica błędu
+
+
 def quality_check(sources, outputs, cues, lang="ru"):
     """Liczy podejrzane miejsca tłumaczenia; zwraca (ocena, opis, przykłady)."""
     issues = {"w języku oryginału": [], "nieprzetłumaczone": [], "zapętlenia": [], "długość": []}
     for src, out in zip(sources, outputs):
         for kind in segment_issues(src, out, lang):
             issues[kind].append(f"{src}  →  {out}" if kind == "długość" else out or src)
-    fast = sum(cue_cps(c) > 20 for c in cues)
+    fast = sum(cue_cps(c) > CPS_MAX for c in cues)
     total = max(1, len(sources))
     bad = (issues["w języku oryginału"] or issues["zapętlenia"] or len(issues["nieprzetłumaczone"]) > 0.02 * total
            or len(issues["długość"]) > 0.05 * total or fast > 0.25 * max(1, len(cues)))
-    parts = [f"{len(v)} {tr(k)}" for k, v in issues.items() if v] + ([tr('{0} za szybkich (>20 zn/s)', fast)] if fast else [])
+    quick = sum(CPS_WARN < cue_cps(c) <= CPS_MAX for c in cues)
+    parts = [f"{len(v)} {tr(k)}" for k, v in issues.items() if v] + ([tr('{0} za szybkich (>20 zn/s)', fast)] if fast else []) \
+        + ([tr('{0} szybkich (17–20 zn/s)', quick)] if quick else [])
     examples = [x for v in issues.values() for x in v[:2]][:4]
     return ("Do sprawdzenia" if bad else "Gotowe"), ", ".join(parts) or tr('bez uwag'), examples
 
@@ -1204,6 +1302,7 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
     step = engine.batch_size
     workers = max(1, getattr(engine, "parallel", 1))
     lang = getattr(engine, "lang", "ru")
+    engine.names = glossary_prompt_names(glossary) if lang in ("ru", "uk") else None
 
     def translate_batch(pos):
         idx = todo[pos:pos + step]
@@ -1423,6 +1522,21 @@ def chapter_count(path):
         return None
 
 
+def kept_flags(path):
+    """Liczba flag ścieżek, których program nie może zgubić: wymuszone, dla niesłyszących, komentarz."""
+    res = run(["ffprobe", "-v", "error", "-show_entries",
+               "stream_disposition=forced,hearing_impaired,comment", "-of", "json", str(path)])
+    try:
+        return sum(v for st in json.loads(res.stdout or "{}").get("streams", [])
+                   for v in st.get("disposition", {}).values())
+    except (ValueError, TypeError):
+        return 0
+
+
+def attachment_count(path):
+    return len(probe_streams(path, "t"))
+
+
 def check_remux(mkv, new, audio=None, subs=None):
     """Zanim nowy plik zastąpi oryginał: musi dać się odczytać, mieć tę samą długość, te same ścieżki obrazu
     i rozdziały oraz oczekiwaną liczbę ścieżek dźwięku i napisów (audio/subs; None = bez sprawdzania)."""
@@ -1437,6 +1551,10 @@ def check_remux(mkv, new, audio=None, subs=None):
                 problems.append(tr('ścieżek {0}: {1} zamiast {2}', kind, got, want))
         if chapter_count(new) != chapter_count(mkv):
             problems.append(tr('brak rozdziałów'))
+        if kept_flags(new) < kept_flags(mkv):
+            problems.append(tr('utracone flagi ścieżek (wymuszone / dla niesłyszących)'))
+        if attachment_count(new) != attachment_count(mkv):
+            problems.append(tr('brak załączników (czcionek napisów)'))
     if problems:
         new.unlink(missing_ok=True)
         raise FatalError(tr('złożony plik nie przeszedł kontroli ({0}) — oryginał pozostał bez zmian', '; '.join(problems)))
@@ -1639,22 +1757,39 @@ def is_standalone_sub(f, videos):
     return not any(name.startswith(v) for v in videos)
 
 
-def detect_speech_language(mkv, audio_index, tmp):
-    """Język mowy nieoznaczonej ścieżki (Whisper na 15 minutach od 5. minuty filmu).
+LANG_WINDOWS = 8                              # tyle 30-sekundowych próbek głosuje o języku mowy
 
-    Bez tego angielski film bez napisów trafiał do GigaAM jako "rosyjski" i dawał bezsensowny tekst.
+
+def detect_speech_language(mkv, audio_index, tmp, center=False):
+    """Język mowy ścieżki: Whisper głosuje na LANG_WINDOWS próbkach rozłożonych po filmie (10–90% długości).
+
+    Jedna próbka zawodziła: piosenka albo rosyjski lektor na angielskim oryginale dawały zły język.
+    Przy 5.1 próbki są z kanału centralnego (dialogi), tak jak samo rozpoznawanie.
     Film niemy albo sama muzyka (niska pewność) i języki nieobsługiwane kończą się błędem zamiast tłumaczenia.
     """
     sample, result = Path(tmp) / "jezyk.wav", Path(tmp) / "jezyk.txt"
-    for start in ("300", "0"):                # krótki film: od początku
-        res = run(["ffmpeg", "-v", "error", "-y", "-ss", start, "-t", "900", "-i", str(mkv),
-                   "-map", f"0:a:{audio_index}", "-ar", "16000", "-ac", "1", str(sample)])
-        if res.returncode == 0 and sample.exists() and sample.stat().st_size > 16000 * 2 * 20:
-            break
+    length = duration(mkv) or 0
+    if length > 300:
+        starts = [length * (0.1 + 0.8 * k / (LANG_WINDOWS - 1)) for k in range(LANG_WINDOWS)]
+        # jeden przebieg ffmpeg: z każdego miejsca 30 s, sklejone w jedną próbkę (detect dzieli ją po 30 s)
+        cmd = ["ffmpeg", "-v", "error", "-y"]
+        for t in starts:
+            cmd += ["-ss", f"{t:.0f}", "-t", "30", "-i", str(mkv)]
+        pan = ",pan=mono|c0=FC" if center else ""
+        chains = "".join(f"[{k}:a:{audio_index}]aresample=16000{pan},aformat=channel_layouts=mono[a{k}];"
+                         for k in range(len(starts)))
+        cmd += ["-filter_complex", chains + "".join(f"[a{k}]" for k in range(len(starts)))
+                + f"concat=n={len(starts)}:v=0:a=1[out]", "-map", "[out]", "-ar", "16000", "-ac", "1", str(sample)]
+        res = run(cmd)
+        if (res.returncode != 0 or not sample.exists()) and center:
+            return detect_speech_language(mkv, audio_index, tmp)   # układ kanałów bez FC — zwykły miks
     else:
+        res = run(["ffmpeg", "-v", "error", "-y", "-i", str(mkv), "-map", f"0:a:{audio_index}",
+                   "-ar", "16000", "-ac", "1", str(sample)])
+    if res.returncode != 0 or not sample.exists() or sample.stat().st_size < 16000 * 2 * 20:
         raise FatalError(tr('nie udało się wyodrębnić dźwięku do rozpoznania języka'))
-    run_helper(["detect", sample, result])
-    code, prob = result.read_text(encoding="utf-8").split()
+    run_helper(["detect", sample, result, "--windows", str(LANG_WINDOWS)])
+    code, prob = result.read_text(encoding="utf-8").split()[:2]
     if float(prob) < 0.5:
         raise FatalError(tr('nie da się pewnie rozpoznać języka mowy ({0}, {1:.0%}) — film niemy, sama muzyka albo kilka języków; wybierz język ręcznie w ustawieniach', code, float(prob)))
     if code not in LANGS:
@@ -1670,19 +1805,34 @@ def transcribe(mkv, audio, args, tmp):
     jest traktowana jak rosyjska (tak jest w większości biblioteki); dla angielskiej wybierz język w ustawieniach.
     """
     ru_srt = mkv.with_suffix(".rozpoznane.ru.srt")
+    meta_file = ru_srt.with_name(ru_srt.name[:-len(".srt")] + ".json")   # czym i w jakim języku powstał
     source = getattr(args, "source", "ru")
-    if ru_srt.exists() and (args.resume or not args.force):
+    reuse = ru_srt.exists() and (args.resume or not args.force)
+    if reuse:
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = None                       # plik ze starszej wersji programu — używany jak dotąd
+        if meta and (meta.get("asr") != args.asr and meta.get("lang") == "ru"
+                     or source != "auto" and meta.get("lang") != source):
+            print(tr('    {0} powstał innym silnikiem albo w innym języku — rozpoznaję mowę od nowa', ru_srt.name))
+            reuse = False
+    if reuse:
         print(tr('    używam istniejącego {0}', ru_srt.name))
     else:
         if not audio:
             raise FatalError(tr('plik nie ma ścieżki dźwiękowej'))
         wav = Path(tmp) / "audio.wav"
         src, lang = main_audio(audio, source)
+        surround = audio[src].get("channels", 2) >= 6
+        print(tr('    dźwięk: ścieżka #{0} [{1}], {2} kan. {3}', src + 1, lang_of(audio[src]) or '?',
+                 audio[src].get("channels", '?'), tr('— kanał centralny (dialogi)') if surround else ''))
+        ollama_unload()                       # cała pamięć karty dla modeli rozpoznawania mowy
         if source == "auto":
             # znacznik języka bywa błędny (rosyjskie seriale oznaczone "eng") — decyduje próbka mowy
             tagged = lang
             try:
-                lang = detect_speech_language(mkv, src, tmp)
+                lang = detect_speech_language(mkv, src, tmp, center=surround)
             except FatalError as e:
                 if tagged is None:
                     raise
@@ -1701,21 +1851,28 @@ def transcribe(mkv, audio, args, tmp):
         res, helper = None, ["transcribe", wav, ru_srt, "--engine", asr, "--language", lang]
         if asr == "whisper" and getattr(args, "whisper_model", None):
             helper += ["--model", args.whisper_model]
-        if audio[src].get("channels", 2) >= 6:
-            # w dźwięku 5.1/7.1 dialogi są w kanale centralnym — bez muzyki i efektów z pozostałych
-            res = run(cmd + ["-ar", "16000", "-af", "pan=mono|c0=FC", str(wav)])
+        if surround:
+            # w dźwięku 5.1/7.1 dialogi są w kanale centralnym — ale bywa w nim też muzyka i efekty,
+            # więc przy oddzielaniu głosu Demucs dostaje sam kanał centralny jako stereo
+            res = run(cmd + (["-ar", "44100", "-af", "pan=stereo|c0=FC|c1=FC"] if args.separate
+                             else ["-ar", "16000", "-af", "pan=mono|c0=FC"]) + [str(wav)])
+            if res.returncode != 0:
+                print(tr('    układ kanałów bez kanału centralnego — używam całego miksu'))
         if res is None or res.returncode != 0:
-            if args.separate:                 # Demucs sam oddzieli głos — potrzebuje stereo 44,1 kHz
-                res = run(cmd + ["-ar", "44100", "-ac", "2", str(wav)])
-                helper.append("--separate")
-            else:
-                res = run(cmd + ["-ar", "16000", "-ac", "1", str(wav)])
+            res = run(cmd + (["-ar", "44100", "-ac", "2"] if args.separate else ["-ar", "16000", "-ac", "1"])
+                      + [str(wav)])
         if res.returncode != 0:
             raise FatalError(tr('ffmpeg nie wyodrębnił dźwięku: {0}', res.stderr.strip()))
+        if args.separate:                     # Demucs oddziela głos — potrzebuje stereo 44,1 kHz
+            helper.append("--separate")
         run_helper(helper)
+        free_helper()                         # pamięć karty wraca do Ollamy przed tłumaczeniem
+        meta = {"asr": asr, "lang": lang, "model": getattr(args, "whisper_model", None) if asr == "whisper" else "gigaam"}
+        meta_file.write_text(json.dumps(meta), encoding="utf-8")
     cues = parse_srt(ru_srt.read_text(encoding="utf-8", errors="replace"))
     if not cues:
         ru_srt.unlink(missing_ok=True)        # pusty wynik nie może być użyty przy następnej próbie
+        meta_file.unlink(missing_ok=True)
         raise FatalError(tr('w dźwięku nie rozpoznano mowy'))
     lang = detect_lang([c.text for c in cues]) or ("ru" if source == "auto" else source)
     return cues, lang
@@ -1854,7 +2011,8 @@ def process(mkv, args, engine):
                     raise FatalError(tr('nie da się podmienić oryginału ({0}) — oryginał pozostał bez zmian', e))
                 shutil.rmtree(voice_part, ignore_errors=True)
                 # napisy są już w pliku — usuwamy tylko pliki pośrednie utworzone przez program
-                for leftover in ([srt_out] if own_srt else []) + [mkv.with_suffix(".rozpoznane.ru.srt")]:
+                for leftover in ([srt_out] if own_srt else []) + [mkv.with_suffix(".rozpoznane.ru.srt"),
+                                                                    mkv.with_suffix(".rozpoznane.ru.json")]:
                     leftover.unlink(missing_ok=True)
                 print(tr('    zapisano w oryginalnym pliku: {0}', mkv.name))
             else:
@@ -3371,7 +3529,9 @@ class QueueApp:
             print(tr('    BŁĄD: {0}', e))
             state = "Błąd"
         except Exception as e:  # nieprzewidziany błąd nie może zatrzymać kolejki
+            import traceback
             print(tr('    BŁĄD: {0}: {1}', type(e).__name__, e))
+            print(traceback.format_exc())     # pełny ślad w dzienniku — inaczej nie da się znaleźć przyczyny
             state = "Błąd"
         self.events.put(("done", item, state))
 

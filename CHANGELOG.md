@@ -7,6 +7,22 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 ### Dodane
 - Plan ulepszeń w `TODO.md` i raport badawczy o rozpoznawaniu mowy, standardach napisów i modelach tłumaczenia.
 - Dokumentacja: `docs/ARCHITEKTURA.md`, `CONTRIBUTING.md`.
+- **Filtr halucynacji rozpoznawania mowy:** usuwa napisy-widma Whispera („Субтитры сделал…”, „Продолжение следует”, „Thanks for watching”), zapętlone zdania i kwestie o bardzo niskiej pewności. (A1)
+- **Słowniczek imion w poleceniu dla modelu:** ustalona pisownia imion serialu trafia do tłumaczenia od razu, nie tylko do poprawek po fakcie. (A9)
+- **Schemat odpowiedzi w Ollamie:** model musi zwrócić dokładnie tyle kwestii, ile dostał — mniej zgubionych kwestii i ponowień. (A10)
+- **Tempo czytania wg norm Netflix PL:** raport jakości pokazuje osobno kwestie szybkie (17–20 znaków/s) i za szybkie (powyżej 20). (A11)
+
+### Zmienione
+- **Język mowy z 8 próbek** rozłożonych po filmie (głosowanie z wagą pewności) zamiast jednej — piosenka albo lektor w jednym miejscu nie zmienia już wyniku; przy 5.1 próbki z kanału centralnego. (A8)
+- **Pamięć karty:** przed rozpoznawaniem mowy Ollama zwalnia model, a po rozpoznawaniu proces audio zwalnia swoje modele — tłumaczenie nie spada częściowo na procesor. (A5)
+- **5.1 z oddzielaniem głosu:** Demucs dostaje kanał centralny zamiast całego miksu; dziennik podaje użytą ścieżkę i liczbę kanałów. (A12)
+- **Rozpoznany tekst (`.rozpoznane.ru.srt`)** jest używany ponownie tylko wtedy, gdy powstał tym samym silnikiem i w tym samym języku. (A3)
+
+### Naprawione
+- **Podmiana MKV zachowuje flagi ścieżek** „wymuszone”, „dla niesłyszących” i „komentarz” — wcześniej były zerowane; kontrola przed podmianą sprawdza teraz flagi i załączniki (czcionki napisów). (A2)
+- **Zapis napisów przez plik tymczasowy** — przerwany zapis nie zostawia niepełnego pliku, który następny przebieg wbudowałby w film. (A3)
+- **Limity czasu** dla ffmpeg i ffprobe oraz dla procesu audio — zawieszony dysk sieciowy nie blokuje kolejki, a Stop działa zawsze. (A6)
+- **Pełny ślad nieprzewidzianego błędu** trafia do `dziennik.txt`. (A7)
 
 ## [1.1] — 2026-11-20
 
