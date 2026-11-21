@@ -4,6 +4,8 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+## [1.3] — 2026-11-21
+
 ### Dodane
 - **Nowy podział rozpoznanej mowy na kwestie** wg norm Netflix PL: cięcie w najlepszym miejscu (koniec zdania, przecinek, pauza), 2 × 42 znaki, 0,83–7 s, przerwa 2 klatki, napis 0,4 s po ostatnim słowie; po pytaniu kwestie nie są sklejane. (B4)
 - **Pewność rozpoznania każdej kwestii** — raport jakości podaje liczbę niepewnych kwestii, powyżej 15% plik idzie „Do sprawdzenia”. (B7)

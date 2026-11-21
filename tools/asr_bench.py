@@ -49,6 +49,14 @@ CONFIGS = {                                  # nazwa -> (silnik, oddzielanie gł
 }
 
 
+def short_name(name):
+    """Krótka nazwa do raportu ("Serial S01E02") — pełne nazwy plików z wydań nie trafiają do raportów."""
+    m = re.match(r"^(.*?)[. _](S\d{1,2})[. _]?(E\d{1,3})", name, re.I)
+    if m:
+        return f"{m.group(1).replace('.', ' ').replace('_', ' ').strip()} {m.group(2).upper()}{m.group(3).upper()}"
+    return re.split(r"[. ](?:19|20)\d\d[. ]|[. ](?:WEB|BluRay|HDTV|DVD)", Path(name).stem)[0].replace(".", " ").strip()
+
+
 def norm(text):
     text = t.TAG_RE.sub(" ", text.lower().replace("ё", "е"))
     return " ".join(re.findall(r"[\w']+", text))
@@ -141,7 +149,7 @@ def main():
                 start = int(total * (0.2 + 0.6 * k / max(1, args.clips - 1)))
                 ref = clip_cues(ref_all, start, args.length)
                 if len(ref) < 10:
-                    print(f"{film.name} @ {start} s: za mało kwestii wzorca ({len(ref)}) — pomijam")
+                    print(f"{short_name(film.name)} @ {start} s: za mało kwestii wzorca ({len(ref)}) — pomijam")
                     continue
                 for name in configs:
                     engine, separate, extra = CONFIGS[name]
@@ -167,9 +175,9 @@ def main():
                         t.resolve_asr_variants(out, llm)
                     took = time.time() - t0
                     hyp = [(seconds(c.start), seconds(c.end), c.text) for c in t.parse_srt(out.read_text(encoding="utf-8"))]
-                    row = {"film": film.name, "start": start, "config": name, "seconds": round(took, 1), **score(ref, hyp)}
+                    row = {"film": short_name(film.name), "start": start, "config": name, "seconds": round(took, 1), **score(ref, hyp)}
                     results.append(row)
-                    print(f"{film.name[:40]:40} @{start:>5}s {name:15} WER {row['wer']:.1%}  CER {row['cer']:.1%}  "
+                    print(f"{short_name(film.name)[:40]:40} @{start:>5}s {name:15} WER {row['wer']:.1%}  CER {row['cer']:.1%}  "
                           f"przesunięcie {row['shift_ms']} ms  widma {row['ghosts']}  za długie {row['too_long']}  "
                           f"za szybkie {row['too_fast']}  ({took:.0f} s)", flush=True)
     t.stop_helper()
