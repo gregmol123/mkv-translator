@@ -14,6 +14,7 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 - **Kopia oryginału przy podmianie** (opcja w „Zapis wyniku”, `--backup-days`, `KOPIA_DNI` na Unraid): oryginał zostaje jako `<nazwa>.orig.mkv` i program kasuje go po podanej liczbie dni. Domyślnie wyłączona, bo zajmuje tyle miejsca co film. Kasowane są tylko kopie zapisane w `kopie_oryginalow.json`. (A4)
 
 ### Zmienione
+- **Szerszy kontekst tłumaczenia:** model widzi też 4 kwestie po partii (zdania rozcięte między kwestie) i 5 ostatnich gotowych par oryginał → tłumaczenie, żeby trzymać formę „ty/Pan”, rodzaj mówiących i pisownię między partiami. (C1)
 - **Język mowy z 8 próbek** rozłożonych po filmie (głosowanie z wagą pewności) zamiast jednej — piosenka albo lektor w jednym miejscu nie zmienia już wyniku; przy 5.1 próbki z kanału centralnego. (A8)
 - **Pamięć karty:** przed rozpoznawaniem mowy Ollama zwalnia model, a po rozpoznawaniu proces audio zwalnia swoje modele — tłumaczenie nie spada częściowo na procesor. (A5)
 - **5.1 z oddzielaniem głosu:** Demucs dostaje kanał centralny zamiast całego miksu; dziennik podaje użytą ścieżkę i liczbę kanałów. (A12)

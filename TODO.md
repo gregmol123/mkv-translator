@@ -1,6 +1,6 @@
 # Plan prac — MKV Translator
 
-Stan na 21.11.2026, 16:01. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
+Stan na 21.11.2026, 16:04. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
 
 ## Zrobione
 
@@ -10,6 +10,7 @@ Stan na 21.11.2026, 16:01. Źródło: raport `reports/Ulepszenia MKV Translatora
 - [x] Z1: zaczynamy od Etapu 1 (szybkie poprawki); A4 czeka na decyzję Z3 — 21.11
 - [x] Etap 1 bez A4 zrobiony (A1–A3, A5–A12): filtr halucynacji, flagi ścieżek, zapis atomowy, pamięć karty, limity czasu, ślad błędów, język z 8 próbek (Shef 01: ru 92%), słowniczek w poleceniu, schemat JSON, tempo 17/20 zn/s, kanał centralny do Demucsa; testy OK, .exe przebudowany, bez wydania — 21.11
 - [x] A4 i Z3: kopia .orig.mkv jako opcja (domyślnie wyłączona, 7 dni po włączeniu, na tym samym dysku co film; Unraid: KOPIA_DNI); kasowane tylko kopie programu; testy OK — 21.11
+- [x] C1: kontekst z 4 kwestiami po partii i 5 gotowymi parami tłumaczeń; próba na 90 kwestiach Shef 15 (gemma4:26b, 17 s) OK — 21.11
 
 ## Do decyzji (Ty)
 
@@ -55,7 +56,7 @@ _ok. 4–6 dni mojej pracy; każdą zmianę mierzymy na B1_
 
 _ok. 2–3 dni mojej pracy_
 
-- [ ] **C1** Kontekst: 3–4 kwestie następne + ostatnie 5 par oryginał→tłumaczenie — M
+- [x] **C1** Kontekst: 3–4 kwestie następne + ostatnie 5 par oryginał→tłumaczenie — M
 - [ ] **C2** Streszczenie filmu/odcinka generowane raz i dodawane do każdej partii — S
 - [ ] **C3** Płeć mówiących (zrobiłem/zrobiłam): wnioskowanie z form rosyjskich + pole w słowniczku — S
 - [ ] **C4** Polskie normy zapisu: „…”, cudzysłowy „”, myślniki dialogowe, godziny 14.15 — S

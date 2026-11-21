@@ -112,7 +112,9 @@ Zasady:
 - imiona i nazwy własne zapisuj w polskiej transkrypcji (np. Сергей -> Siergiej),
 - zachowaj myślnik na początku kwestii dialogowej, jeśli jest w oryginale,
 - każda kwestia to osobna wartość: nie łącz, nie dziel i nie pomijaj kwestii,
-- pole "kontekst" (jeśli występuje) to wcześniejsze kwestie tylko do wglądu — nie tłumacz go i nie zwracaj.
+- pola pomocnicze (jeśli występują) są tylko do wglądu — nie tłumacz ich i nie zwracaj: "kontekst" to kwestie \
+tuż przed tą partią, "dalej" to kwestie tuż po niej (zdanie bywa rozcięte między kwestie), a "przetlumaczone" to \
+wcześniejsze pary oryginał -> tłumaczenie — trzymaj się ich formy zwracania się (ty/Pan), rodzaju mówiących i pisowni.
 Odpowiedz samym JSON-em, bez komentarzy i bez bloków kodu."""
 
 SHORTEN_PROMPT = """Jesteś redaktorem polskich napisów filmowych. Dostajesz obiekt JSON: klucze to numery, \
@@ -131,7 +133,9 @@ Rules:
 - write names in standard English transliteration (e.g. Сергей -> Sergei),
 - keep a leading dash of a dialogue line if the original has one,
 - every cue is a separate value: do not merge, split or skip cues,
-- the "kontekst" field (if present) holds earlier cues for reference only — do not translate or return it.
+- helper fields (if present) are for reference only — do not translate or return them: "kontekst" holds the cues \
+just before this batch, "dalej" the cues just after it (a sentence may be split across cues), and "przetlumaczone" \
+earlier source -> translation pairs — keep their forms of address, speakers' genders and spellings consistent.
 Reply with JSON only, no comments and no code blocks."""
 
 SHORTEN_PROMPT_EN = """You edit English film subtitles. You receive a JSON object: keys are numbers, values are \
@@ -590,8 +594,13 @@ def parse_json_reply(raw, count):
 
 
 def json_payload(texts, context):
+    """Zapytanie dla modelu. context: lista wcześniejszych kwestii albo słownik
+    {"kontekst": [...], "przetlumaczone": [[oryginał, tłumaczenie], ...], "dalej": [...]}."""
     payload = {"kwestie": {str(i): t for i, t in enumerate(texts, 1)}}
-    if context:
+    if isinstance(context, dict):
+        extra = {k: v for k, v in context.items() if v}
+        payload = {**extra, **payload}
+    elif context:
         payload = {"kontekst": list(context), **payload}
     return json.dumps(payload, ensure_ascii=False, indent=0)
 
@@ -1283,6 +1292,9 @@ def report_quality(video, verdict, summary, count):
         pass
 
 
+CONTEXT_NEXT, CONTEXT_PAIRS = 4, 5          # kwestie po partii i gotowe pary tłumaczeń w zapytaniu
+
+
 def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, quality=None):
     """Tłumaczy kwestie; postęp zapisuje po każdej partii w pliku checkpoint, żeby dało się wznowić.
 
@@ -1306,7 +1318,13 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
 
     def translate_batch(pos):
         idx = todo[pos:pos + step]
-        context = [flat[i] for i in todo[max(0, pos - 8):pos]]
+        # kontekst: kwestie przed partią, 4 kwestie po niej (zdania rozcięte między kwestie) i ostatnie
+        # gotowe pary oryginał -> tłumaczenie (forma "ty/Pan", rodzaj mówiących, pisownia); przy partiach
+        # tłumaczonych równolegle pary pochodzą z poprzedniej grupy — bieżąca jeszcze nie jest gotowa
+        earlier = [i for i in todo[:pos] if i in saved][-CONTEXT_PAIRS:]
+        context = {"kontekst": [flat[i] for i in todo[max(0, pos - 8):pos]],
+                   "przetlumaczone": [[flat[i], saved[i]] for i in earlier],
+                   "dalej": [flat[i] for i in todo[pos + step:pos + step + CONTEXT_NEXT]]}
         out = engine.translate([flat[i] for i in idx], context)
         for n, i in enumerate(idx):           # kwestia wróciła nieprzetłumaczona — przetłumacz ją osobno
             if n < len(out) and still_source(out[n], lang):
