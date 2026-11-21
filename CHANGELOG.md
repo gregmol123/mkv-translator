@@ -6,7 +6,7 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ### Dodane
 - **Rozpoznawanie mówców** (pyannote community-1, opcja w „Gdy brak napisów”, `--diarize`, wymaga tokenu `HF_TOKEN`): każda kwestia dostaje mówcę, dwie krótkie wypowiedzi różnych osób łączą się w kwestię z myślnikami, a płeć mówiącego (z wysokości głosu) trafia do tłumacza, żeby dobrał „zrobiłem/zrobiłam”. (B12)
-- **Dwa modele, wersja 2:** przy silniku „GigaAM+Whisper” model językowy wybiera lepszy zapis dla każdej minuty filmu zamiast pojedynczych kwestii. (B8)
+- **Dwa modele, wersja 2 — domyślny silnik rozpoznawania mowy:** GigaAM i Whisper zapisują całość, a model językowy wybiera lepszy zapis dla każdej minuty filmu. W pomiarze 10,8% błędu słów wobec 13,2% samego GigaAM + Demucs, przy ok. 3,5× dłuższym rozpoznawaniu. (B8)
 
 ## [1.3] — 2026-11-21
 

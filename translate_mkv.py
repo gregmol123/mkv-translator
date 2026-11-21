@@ -2735,7 +2735,7 @@ def main():
                     help=tr('z --mux/--lektor: nie zmieniaj oryginału, zapisz kopię <nazwa>.pl.mkv'))
     ap.add_argument("--whisper", action="store_true",
                     help=tr('gdy plik nie ma rosyjskich napisów, rozpoznaj mowę z dźwięku'))
-    ap.add_argument("--asr", choices=["gigaam", "gigaam-rnnt", "whisper", "gigaam+whisper"], default="gigaam",
+    ap.add_argument("--asr", choices=["gigaam", "gigaam-rnnt", "whisper", "gigaam+whisper"], default="gigaam+whisper",
                     help=tr('silnik rozpoznawania mowy dla --whisper (domyślnie gigaam — model tylko dla rosyjskiego)'))
     ap.add_argument("--diarize", action="store_true",
                     help=tr('z --whisper: rozpoznawanie mówców (pyannote) — myślniki dialogowe i płeć mówiącego; wymaga HF_TOKEN'))
@@ -3080,7 +3080,7 @@ class QueueApp:
 
         g = group(tr('Gdy brak napisów'))
         self.whisper = tk.BooleanVar(value=True)
-        self.asr = tk.StringVar(value="GigaAM")
+        self.asr = tk.StringVar(value="GigaAM+Whisper")   # B8: najmniej błędów w pomiarze (10,8% wobec 13,2%)
         self.separate = tk.BooleanVar(value=True)
         check(g, 0, tr('rozpoznaj mowę z dźwięku'), self.whisper)
         ttk.Label(g, text=tr('Silnik:')).grid(row=1, column=0, sticky="w")
