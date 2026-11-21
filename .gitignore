@@ -23,3 +23,5 @@ unraid/ui_en.py
 !docs/*.md
 !reports/
 !reports/*.md
+!tools/
+!tools/*.py
