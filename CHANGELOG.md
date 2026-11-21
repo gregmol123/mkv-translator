@@ -4,12 +4,14 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+## [1.5] — 2026-11-21
+
 ### Dodane
 - **Płeć mówiących z oryginału:** model odczytuje ją z rosyjskich form (сделал/сделала) i zachowuje w polskim (zrobiłem/zrobiłam); w słowniczku można wpisać `"plec": "K"/"M"` przy postaci. (C3)
 - **Polskie normy zapisu napisów:** wielokropek jednym znakiem, cudzysłowy „…”, myślnik dialogowy `- `, godziny z kropką (14.30). (C4)
 - **Ocena jakości bez wzorca (MetricX-24 XL):** po tłumaczeniu każda kwestia dostaje wynik 0–25; kwestie z wynikiem ≥ 8 idą do automatycznej naprawy, średnia trafia do raportu jakości. `MKV_QE=0` wyłącza. (C5)
 - **Tłumaczenie całymi zdaniami przy rozpoznanej mowie:** zdanie rozcięte między kwestie idzie do modelu w całości i wraca do tych samych kwestii i czasów. W próbie lepszy wynik MetricX na takich zdaniach (5,21 wobec 5,59) i krótszy czas. `MKV_SENTENCES=0` wyłącza. (C7)
-- **Porównanie modeli tłumaczenia** `tools/mt_bench.py` (MetricX bez wzorca) i obsługa modeli bez czatu (MiLMMT). (C6, narzędzie)
+- **Porównanie modeli tłumaczenia** `tools/mt_bench.py` (MetricX bez wzorca) i obsługa modeli bez czatu (MiLMMT). Pomiar na 360 kwestiach: MiLMMT-46-12B 4,58 wobec 4,81 dla gemma4:31b i 2× szybciej, ale bez kontekstu, słowniczka i streszczenia, a MetricX może go faworyzować — domyślny model bez zmian. (C6)
 
 ## [1.4.1] — 2026-11-21
 
