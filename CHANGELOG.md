@@ -4,6 +4,12 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+## [1.4.1] — 2026-11-21
+
+### Dodane
+- **Numer wersji** w tytule okna, w dzienniku przy każdym Starcie i w wierszu poleceń (`--version`).
+- **Historia zmian w programie:** Narzędzia → „Co nowego (historia zmian)”; po aktualizacji okno pokazuje się samo raz.
+
 ## [1.4] — 2026-11-21
 
 ### Dodane

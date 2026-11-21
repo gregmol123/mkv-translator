@@ -93,6 +93,7 @@ def source_order(source):
 LINE_WIDTH = 42          # maksymalna długość linii napisów
 GOOGLE_CHAR_LIMIT = 4500
 CLAUDE_MODEL = "claude-opus-5-5"
+VERSION = "1.4.1"                            # numer wydania (GitHub Releases) — w tytule okna, dzienniku i --version
 OLLAMA_MODEL = "gemma4:31b"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
@@ -2722,6 +2723,7 @@ def main():
     if "--ui-lang" in sys.argv[:-1]:          # przed budową pomocy --help, która też jest tłumaczona
         set_ui_lang(sys.argv[sys.argv.index("--ui-lang") + 1])
     ap = argparse.ArgumentParser(description=tr('Tłumaczy napisy (rosyjskie, angielskie, ukraińskie) na polski.'))
+    ap.add_argument("--version", action="version", version=f"MKV Translator {VERSION}")
     ap.add_argument("paths", nargs="*", help=tr('pliki MKV lub foldery z plikami MKV'))
     ap.add_argument("--engine", choices=["ollama", "google", "claude"], default="ollama",
                     help=tr('silnik tłumaczenia (domyślnie ollama — lokalnie)'))
@@ -2824,6 +2826,7 @@ def main():
     except FatalError as e:
         print(tr('BŁĄD: {0}', e))
         return 1
+    print(f"MKV Translator {VERSION}")
     print(tr('Silnik tłumaczenia: {0}; plików: {1}', engine.name, len(files)))
 
     failed = 0
@@ -2880,6 +2883,16 @@ def ollama_models():
         return []
 
 
+def changelog_text():
+    """Treść CHANGELOG.md: obok skryptu, a w .exe — dołączona przy budowaniu (sys._MEIPASS)."""
+    for folder in (Path(getattr(sys, "_MEIPASS", APP_DIR)), APP_DIR, Path(__file__).resolve().parent):
+        try:
+            return (folder / "CHANGELOG.md").read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return tr('Historia zmian jest na GitHubie: https://github.com/gregmol123/mkv-translator/blob/main/CHANGELOG.md')
+
+
 def tk_error():
     import tkinter
     return tkinter.TclError
@@ -2930,7 +2943,7 @@ class QueueApp:
         # dziennik obok programu: zostaje po zamknięciu okna, więc da się sprawdzić przyczynę błędów
         sys.stdout = sys.stderr = LogWriter(self.events, queue_file.with_name("dziennik.txt") if queue_file else None)
 
-        root.title(tr('MKV Translator — tłumaczenie napisów'))
+        root.title(tr('MKV Translator {0} — tłumaczenie napisów', VERSION))
         root.geometry("1320x800")
         root.minsize(1040, 600)
         style = ttk.Style()
@@ -2962,7 +2975,8 @@ class QueueApp:
                               (tr('Usuń zakończone z kolejki'), self.clear_done), (tr('Wyczyść całą kolejkę'), self.clear),
                               None, (tr('Raport jakości tłumaczeń'), self.open_report), (tr('Otwórz dziennik'), self.open_log),
                               (tr('Sprawdź instalację'), self.check_install), None,
-                              (tr('Pobierz model Ollamy...'), self.pull_dialog)))
+                              (tr('Pobierz model Ollamy...'), self.pull_dialog), None,
+                              (tr('Co nowego (historia zmian)'), self.changelog_dialog)))
         tools["menu"] = menu
         tools.pack(side="left")
         self.stop_btn = ttk.Button(bar, text=tr('■ Stop'), command=self.stop, state="disabled")
@@ -3221,6 +3235,40 @@ class QueueApp:
         buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(buttons, text="OK", command=ok).pack(side="left")
         ttk.Button(buttons, text=tr('Anuluj'), command=win.destroy).pack(side="left", padx=6)
+
+    def changelog_dialog(self):
+        """Historia zmian (CHANGELOG.md, w .exe dołączony do programu) w osobnym oknie."""
+        tk, ttk = self.tk, self.ttk
+        if getattr(self, "log_win", None) and self.log_win.winfo_exists():
+            self.log_win.lift()
+            return
+        text = changelog_text()
+        win = self.log_win = tk.Toplevel(self.root)
+        win.title(tr('Co nowego — MKV Translator {0}', VERSION))
+        win.geometry("820x620")
+        win.transient(self.root)
+        frame = ttk.Frame(win, padding=8)
+        frame.pack(fill="both", expand=True)
+        box = tk.Text(frame, wrap="word", font=("Segoe UI", 10), relief="flat", padx=10, pady=8)
+        scroll = ttk.Scrollbar(frame, command=box.yview)
+        box.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        box.pack(fill="both", expand=True)
+        box.tag_configure("h1", font=("Segoe UI", 15, "bold"), spacing3=6)
+        box.tag_configure("h2", font=("Segoe UI", 12, "bold"), spacing1=12, spacing3=4, foreground="#0b5cad")
+        box.tag_configure("h3", font=("Segoe UI", 10, "bold"), spacing1=6)
+        for line in text.splitlines():
+            clean = re.sub(r"\*\*|`|\[([^\]]+)\]\([^)]+\)", lambda m: m.group(1) or "", line)
+            if line.startswith("### "):
+                box.insert("end", clean[4:] + "\n", "h3")
+            elif line.startswith("## "):
+                box.insert("end", clean[3:] + "\n", "h2")
+            elif line.startswith("# "):
+                box.insert("end", clean[2:] + "\n", "h1")
+            else:
+                box.insert("end", ("• " + clean[2:] if clean.startswith("- ") else clean) + "\n")
+        box.configure(state="disabled")
+        ttk.Button(frame, text=tr('Zamknij'), command=win.destroy).pack(side="bottom", anchor="e", pady=(8, 0))
 
     def pull_dialog(self):
         """Pobieranie modelu do Ollamy (ollama pull) z postępem; po pobraniu odświeża listy modeli."""
@@ -3561,6 +3609,8 @@ class QueueApp:
         except (AttributeError, OSError, ValueError):
             return
         options = data.get("options", {})
+        if options.get("seen_version") != VERSION:   # nowa wersja programu — pokaż, co się zmieniło
+            self.root.after(800, self.changelog_dialog)
         self.avg_seconds = (data.get("stats") or {}).get("avg_seconds")
         for name in self.SAVED_OPTIONS:
             if name in options and name != "voice":
@@ -3590,6 +3640,7 @@ class QueueApp:
         for name in self.CHOICE_OPTIONS:
             options[name] = untr(options[name], self.CHOICE_OPTIONS[name])
         options["ui_lang"] = ui["lang"]
+        options["seen_version"] = VERSION       # "Co nowego" pokazuje się raz po aktualizacji
         try:
             tmp = self.queue_file.with_name(self.queue_file.name + ".tmp")
             stats = {"avg_seconds": self.average_seconds()}
@@ -3770,7 +3821,7 @@ class QueueApp:
         cancel.clear()
         self.run_started, self.stop_reason = time.time(), None
         threading.Thread(target=prune_backups, daemon=True).start()   # stare kopie .orig.mkv
-        print(time.strftime("\n===== Start %Y-%m-%d %H:%M ====="))
+        print(time.strftime("\n===== Start %Y-%m-%d %H:%M =====") + f"  (MKV Translator {VERSION})")
         if self.apply_parallel(then_start=True):   # najpierw restart Ollamy z nową równoległością
             self.stop_btn.configure(state="normal")
             return

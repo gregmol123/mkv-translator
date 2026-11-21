@@ -24,10 +24,14 @@ python -W error -c "compile(open('translate_mkv.py', encoding='utf-8').read(), '
 
 Zmianę w oknie sprawdź w obu językach (przełącznik „Język okna”). Zmianę w tłumaczeniu sprawdź na kilkudziesięciu prawdziwych kwestiach i opisz wynik w `CHANGELOG.md` w sekcji „Niewydane”.
 
+## Wydanie
+
+Przed wydaniem podnieś `VERSION` w `translate_mkv.py` i przenieś sekcję „Niewydane” w `CHANGELOG.md` pod nowy numer — ten sam numer ma tag na GitHubie (np. `v1.4.1`).
+
 ## Budowanie .exe
 
 ```bat
-python -m PyInstaller --noconfirm --onefile --windowed --name "MKV Translator" translate_mkv.py
+python -m PyInstaller --noconfirm --onefile --windowed --name "MKV Translator" --add-data "CHANGELOG.md;." translate_mkv.py
 ```
 
 `ui_en.py` trafia do środka automatycznie. Obok `.exe` muszą leżeć `audio_tools.py`, `ui_en.py` i `audio_env`, jeśli mają działać funkcje audio.

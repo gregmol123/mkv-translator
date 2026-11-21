@@ -417,4 +417,9 @@ EN = {
     'rozpoznawanie mówców (pyannote): myślniki dialogowe i płeć mówiącego; wymaga HF_TOKEN': 'speaker recognition (pyannote): dialogue dashes and speaker gender; needs HF_TOKEN',
     'z --whisper: rozpoznawanie mówców (pyannote) — myślniki dialogowe i płeć mówiącego; wymaga HF_TOKEN': 'with --whisper: speaker recognition (pyannote) — dialogue dashes and speaker gender; needs HF_TOKEN',
     'rozpoznawaj mówców (myślniki, płeć; pyannote)': 'recognise speakers (dashes, gender; pyannote)',
+    'MKV Translator {0} — tłumaczenie napisów': 'MKV Translator {0} — subtitle translation',
+    'Co nowego (historia zmian)': "What's new (changelog)",
+    'Co nowego — MKV Translator {0}': "What's new — MKV Translator {0}",
+    'Zamknij': 'Close',
+    'Historia zmian jest na GitHubie: https://github.com/gregmol123/mkv-translator/blob/main/CHANGELOG.md': 'The changelog is on GitHub: https://github.com/gregmol123/mkv-translator/blob/main/CHANGELOG.md',
 }
