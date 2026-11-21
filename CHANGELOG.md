@@ -4,6 +4,8 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+## [1.2] — 2026-11-21
+
 ### Dodane
 - Plan ulepszeń w `TODO.md` i raport badawczy o rozpoznawaniu mowy, standardach napisów i modelach tłumaczenia.
 - Dokumentacja: `docs/ARCHITEKTURA.md`, `CONTRIBUTING.md`.
