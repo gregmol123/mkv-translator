@@ -119,3 +119,17 @@ def test_glossary_prompt_names(tmp_path):
 def test_short_name():
     from asr_bench import short_name
     assert short_name("Serial.S01.E01.2024.Grupa.mkv") == "Serial S01E01"
+
+
+def test_transcribe_info_is_per_file(tmp_path):
+    """D3: ścieżka audio z rozpoznania trafia do słownika pliku, nie do wspólnego stanu."""
+    import argparse
+    mkv = tmp_path / "a.mkv"
+    srt = tmp_path / "a.rozpoznane.ru.srt"
+    t.write_srt([cue("Привет, как дела?")], srt)
+    (tmp_path / "a.rozpoznane.ru.json").write_text(json.dumps({"asr": "gigaam", "lang": "ru", "audio": 2}), encoding="utf-8")
+    args = argparse.Namespace(resume=False, force=False, asr="gigaam", source="auto", diarize=False)
+    first, second = {}, {}
+    t.transcribe(mkv, [], args, str(tmp_path), info=first)
+    assert first.get("audio_index") == 2 and second == {}
+    assert not hasattr(t, "ASR_INFO")

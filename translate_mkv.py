@@ -2231,16 +2231,17 @@ def resolve_asr_variants(srt_path, engine):
 
 ASR_UNSURE = 0.6                             # pewność rozpoznania kwestii, poniżej której warto ją odsłuchać
 ASR_UNSURE_SHARE = 0.15                      # przy takim udziale niepewnych kwestii plik idzie "Do sprawdzenia"
-ASR_INFO = {}                                # niepewne rozpoznanie w bieżącym pliku (ustawia transcribe())
 
 
-def transcribe(mkv, audio, args, tmp, engine=None):
+def transcribe(mkv, audio, args, tmp, engine=None, info=None):
     """Rozpoznaje mowę ze ścieżki dźwiękowej; zwraca (kwestie, język). Wynik zostaje w <nazwa>.rozpoznane.ru.srt
     (nazwa historyczna — plik może zawierać też inny język).
 
     GigaAM zna tylko rosyjski: dla innych języków mowę rozpoznaje Whisper. Nieoznaczona ścieżka przy "auto"
     jest traktowana jak rosyjska (tak jest w większości biblioteki); dla angielskiej wybierz język w ustawieniach.
+    info: słownik pliku, do którego trafia ścieżka audio, mówcy i pewność rozpoznania (D3).
     """
+    info = {} if info is None else info
     ru_srt = mkv.with_suffix(".rozpoznane.ru.srt")
     meta_file = ru_srt.with_name(ru_srt.name[:-len(".srt")] + ".json")   # czym i w jakim języku powstał
     source = getattr(args, "source", "ru")
@@ -2258,13 +2259,13 @@ def transcribe(mkv, audio, args, tmp, engine=None):
     if reuse:
         print(tr('    używam istniejącego {0}', ru_srt.name))
         if meta and meta.get("audio") is not None:
-            ASR_INFO["audio_index"] = meta["audio"]
+            info["audio_index"] = meta["audio"]
     else:
         if not audio:
             raise FatalError(tr('plik nie ma ścieżki dźwiękowej'))
         wav = Path(tmp) / "audio.wav"
         src, lang = main_audio(audio, source)
-        ASR_INFO["audio_index"] = src         # D3: lektor ściszy tę samą ścieżkę, z której rozpoznano mowę
+        info["audio_index"] = src         # D3: lektor ściszy tę samą ścieżkę, z której rozpoznano mowę
         surround = audio[src].get("channels", 2) >= 6
         print(tr('    dźwięk: ścieżka #{0} [{1}], {2} kan. {3}', src + 1, lang_of(audio[src]) or '?',
                  audio[src].get("channels", '?'), tr('— kanał centralny (dialogi)') if surround else ''))
@@ -2335,10 +2336,10 @@ def transcribe(mkv, audio, args, tmp, engine=None):
     except (OSError, ValueError):
         speakers = None
     if speakers and len(speakers) == len(cues):
-        ASR_INFO["speakers"] = speakers
+        info["speakers"] = speakers
     if len(conf) == len(cues):
         low = [c.text for c, p in zip(cues, conf) if p is not None and p < ASR_UNSURE]
-        ASR_INFO.update(unsure=len(low), total=len(cues), examples=low[:2])
+        info.update(unsure=len(low), total=len(cues), examples=low[:2])
         if low:
             print(tr('    niepewne rozpoznanie mowy: {0} z {1} kwestii (pewność < {2:.0%})', len(low), len(cues), ASR_UNSURE))
     return cues, lang
@@ -2407,7 +2408,7 @@ def process(mkv, args, engine):
         return "Ma polskie"
 
     quality = {"verdict": "Gotowe"}           # ocena tłumaczenia (gdy nic nie tłumaczymy — zostaje "Gotowe")
-    ASR_INFO.clear()
+    asr = {}                                  # D3: wynik rozpoznania mowy tego pliku (ścieżka, mówcy, pewność)
     with tempfile.TemporaryDirectory() as tmp:
         if ext_pl and (cues := load_sub_cues(ext_pl, tmp)):
             write_srt(cues, srt_out)              # kopia robocza; plik użytkownika zostaje nietknięty
@@ -2429,7 +2430,7 @@ def process(mkv, args, engine):
                     if not args.whisper or args.track is not None:
                         raise
                     print(tr('    {0} — rozpoznaję mowę z dźwięku', e))
-                    found = transcribe(mkv, audio, args, tmp, engine)
+                    found = transcribe(mkv, audio, args, tmp, engine, asr)
                     from_speech = True
                 cues, lang = found
             else:
@@ -2439,7 +2440,7 @@ def process(mkv, args, engine):
                 if args.whisper and args.track is None and audio and len(cues) < 1.5 * minutes:
                     print(tr('    napisy mają tylko {0} kwestii na {1:.0f} min filmu — rozpoznaję mowę z dźwięku', len(cues), minutes))
                     try:
-                        spoken, spoken_lang = transcribe(mkv, audio, args, tmp, engine)
+                        spoken, spoken_lang = transcribe(mkv, audio, args, tmp, engine, asr)
                         if len(spoken) > len(cues):
                             cues, lang = spoken, spoken_lang
                             from_speech = True
@@ -2449,10 +2450,10 @@ def process(mkv, args, engine):
             translate = translate_sentences if from_speech and os.environ.get("MKV_SENTENCES", "1") != "0" \
                 else translate_cues
             write_srt(translate(cues, engine, part, args.resume or not args.force,
-                                glossary_file(mkv), quality, ASR_INFO.get("speakers")), srt_out)
-            if ASR_INFO.get("unsure"):        # B7: niepewne rozpoznanie mowy w ocenie pliku
-                quality["summary"] += tr(', niepewne rozpoznanie mowy: {0} kwestii', ASR_INFO["unsure"])
-                if ASR_INFO["unsure"] > ASR_UNSURE_SHARE * ASR_INFO["total"]:
+                                glossary_file(mkv), quality, asr.get("speakers")), srt_out)
+            if asr.get("unsure"):        # B7: niepewne rozpoznanie mowy w ocenie pliku
+                quality["summary"] += tr(', niepewne rozpoznanie mowy: {0} kwestii', asr["unsure"])
+                if asr["unsure"] > ASR_UNSURE_SHARE * asr["total"]:
                     quality["verdict"] = "Do sprawdzenia"
             report_quality(mkv, quality["verdict"], quality["summary"], len(cues))
             print(tr('    zapisano {0}', srt_out.name))
@@ -2475,7 +2476,7 @@ def process(mkv, args, engine):
                          if a.get("tags", {}).get("title") == "Polski lektor"] if (args.force or revoice) and voice else []
             new_srt = srt_out if args.force or not pl_subs else None
             mux(mkv, mkv_out, new_srt, len(streams), voice, audio, args.replace_audio, old_subs, old_audio,
-                ASR_INFO.get("audio_index"))
+                asr.get("audio_index"))
             if args.replace:
                 # oczekiwane ścieżki: oryginał minus zastępowane ścieżki programu plus nowe
                 want_audio = 1 if voice and args.replace_audio else len(audio) - len(old_audio) + bool(voice)
