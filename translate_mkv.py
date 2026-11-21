@@ -498,6 +498,8 @@ def mux(mkv, out_path, srt=None, sub_count=0, voice=None, audio=(), replace_audi
     drop_subs / drop_audio: numery ścieżek z poprzedniego przebiegu, które nowe mają zastąpić.
     orig: ścieżka dźwiękowa, z której rozpoznano mowę — lektor ścisza właśnie ją (None = wybór jak przy rozpoznawaniu).
     """
+    if mkvmerge_exe():
+        return mux_mkvmerge(mkv, out_path, srt, voice, audio, replace_audio, drop_subs, drop_audio, orig)
     cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(mkv)]
     # -max_interleave_delta 0: bez tego w plikach z okładką (obraz "attached pic") ffmpeg zapisuje
     # wszystkie napisy jednym blokiem na końcu pliku i odtwarzacze gubią je po przewinięciu
@@ -535,6 +537,73 @@ def mux(mkv, out_path, srt=None, sub_count=0, voice=None, audio=(), replace_audi
     if res.returncode != 0:
         out_path.unlink(missing_ok=True)
         raise FatalError(tr('ffmpeg nie złożył pliku MKV: {0}', res.stderr.strip()))
+
+
+
+def mkvmerge_exe():
+    """mkvmerge z MKVToolNix (PATH albo domyślny folder instalacji); MKV_MKVMERGE=0 wymusza ffmpeg."""
+    if os.environ.get("MKV_MKVMERGE") == "0":
+        return None
+    found = shutil.which("mkvmerge")
+    if not found:
+        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+            exe = Path(base or "-") / "MKVToolNix" / "mkvmerge.exe"
+            if exe.is_file():
+                return str(exe)
+    return found
+
+
+def lektor_track(mkv, voice, audio, orig, out):
+    """Lektor na przyciszonym oryginale (oryginał cichnie, gdy lektor mówi) jako osobny plik AAC dla mkvmerge."""
+    res = run(["ffmpeg", "-v", "error", "-y", "-i", str(mkv), "-i", str(voice), "-filter_complex",
+               f"[1:a]aresample=48000,volume=1.5,asplit=2[v1][v2];"
+               f"[0:a:{orig if orig is not None else main_audio(audio, 'auto')[0]}]aresample=48000,"
+               "aformat=channel_layouts=stereo[orig];"
+               "[orig][v1]sidechaincompress=threshold=0.02:ratio=8:attack=15:release=500[duck];"
+               "[duck][v2]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[lektor]",
+               "-map", "[lektor]", "-c:a", "aac", "-b:a", "192k", str(out)])
+    if res.returncode != 0:
+        out.unlink(missing_ok=True)
+        raise FatalError(tr('ffmpeg nie złożył pliku MKV: {0}', res.stderr.strip()))
+
+
+def mux_mkvmerge(mkv, out_path, srt, voice, audio, replace_audio, drop_subs, drop_audio, orig):
+    """D5: składanie przez mkvmerge — zachowuje rozdziały, załączniki, tagi, flagi i nazwy ścieżek w natywnej
+    postaci Matroski (ffmpeg przepisuje kontener i bywa, że gubi część metadanych)."""
+    exe = mkvmerge_exe()
+    info = json.loads(run([exe, "-J", str(mkv)], timeout=300).stdout or "{}")
+    tracks = {"subtitles": [], "audio": []}
+    for t in info.get("tracks", []):
+        if t.get("type") in tracks:
+            tracks[t["type"]].append(t["id"])      # kolejność jak w ffprobe: n-ta ścieżka danego rodzaju
+    cmd = [exe, "--quiet", "-o", str(out_path)]
+    keep_subs = [tid for i, tid in enumerate(tracks["subtitles"]) if i not in set(drop_subs)]
+    keep_audio = [] if voice and replace_audio else         [tid for i, tid in enumerate(tracks["audio"]) if i not in set(drop_audio)]
+    if drop_subs:
+        cmd += ["-s", ",".join(map(str, keep_subs))] if keep_subs else ["-S"]
+    if voice and replace_audio or drop_audio:
+        cmd += ["-a", ",".join(map(str, keep_audio))] if keep_audio else ["-A"]
+    # dotychczasowym ścieżkom zdejmujemy tylko "domyślną" — "wymuszone" i "dla niesłyszących" zostają
+    if srt:
+        cmd += [x for tid in keep_subs for x in ("--default-track-flag", f"{tid}:0")]
+    if voice:
+        cmd += [x for tid in keep_audio for x in ("--default-track-flag", f"{tid}:0")]
+    cmd.append(str(mkv))
+    if srt:
+        cmd += ["--language", f"0:{TARGETS[OUT['code']][4]}", "--track-name", f"0:{TARGETS[OUT['code']][3]}",
+                "--default-track-flag", f"0:{0 if voice else 1}", "--sub-charset", "0:UTF-8", str(srt)]
+    lektor = out_path.with_name(out_path.stem + ".lektor.mka") if voice else None
+    try:
+        if voice:
+            lektor_track(mkv, voice, audio, orig, lektor)
+            cmd += ["--language", "0:pol", "--track-name", "0:Polski lektor", "--default-track-flag", "0:1", str(lektor)]
+        res = run(cmd)
+    finally:
+        if lektor:
+            lektor.unlink(missing_ok=True)
+    if res.returncode not in (0, 1):            # 1 = ostrzeżenia, plik powstał
+        out_path.unlink(missing_ok=True)
+        raise FatalError(tr('mkvmerge nie złożył pliku MKV: {0}', (res.stdout + res.stderr).strip()))
 
 
 # ---------------------------------------------------------------- SRT

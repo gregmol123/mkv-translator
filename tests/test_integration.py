@@ -40,7 +40,12 @@ def make_mkv(folder):
     return mkv
 
 
-def test_full_pass_embeds_polish_and_keeps_forced(tmp_path, monkeypatch):
+@pytest.mark.parametrize("muxer", ["ffmpeg", "mkvmerge"])
+def test_full_pass_embeds_polish_and_keeps_forced(tmp_path, monkeypatch, muxer):
+    if muxer == "ffmpeg":
+        monkeypatch.setenv("MKV_MKVMERGE", "0")
+    elif not t.mkvmerge_exe():
+        pytest.skip("brak mkvmerge (MKVToolNix)")
     monkeypatch.setenv("MKV_QE", "0")
     monkeypatch.setattr(t, "APP_DIR", tmp_path)              # raport jakości i dziennik w folderze testu
     monkeypatch.setattr(t, "QUALITY_REPORT", tmp_path / "raport.csv", raising=False)
@@ -60,3 +65,23 @@ def test_full_pass_embeds_polish_and_keeps_forced(tmp_path, monkeypatch):
     assert not list(tmp_path.glob("*.pl.srt")) and not list(tmp_path.glob("*.tmp*"))   # bez śmieci obok filmu
     # drugi przebieg: plik ma już polskie napisy
     assert t.process(mkv, args, FakeEngine()) == "Ma polskie"
+
+
+def test_mkvmerge_voice_and_replaced_subs(tmp_path, monkeypatch):
+    """Lektor przez mkvmerge: nowa ścieżka dźwięku domyślna, stara bez flagi; podmiana starych polskich napisów."""
+    if not t.mkvmerge_exe():
+        pytest.skip("brak mkvmerge (MKVToolNix)")
+    mkv = make_mkv(tmp_path)
+    voice = tmp_path / "lektor.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=300:d=30", str(voice)], check=True)
+    srt = tmp_path / "pl.srt"
+    t.write_srt([t.Cue("00:00:01,000", "00:00:02,000", "", "Cześć")], srt)
+    out = tmp_path / "out.mkv"
+    audio = t.probe_streams(mkv, "a")
+    t.mux(mkv, out, srt, 2, voice, audio, False, drop_subs=(0,), drop_audio=(), orig=0)
+    subs, auds = t.probe_streams(out, "s"), t.probe_streams(out, "a")
+    assert [s["tags"].get("language") for s in subs] == ["rus", "pol"]     # pierwsza zastąpiona nową
+    assert subs[0]["disposition"]["forced"] == 1 and subs[1]["disposition"]["default"] == 0
+    assert len(auds) == 2 and auds[1]["tags"].get("language") == "pol" and auds[1]["disposition"]["default"] == 1
+    assert auds[0]["disposition"]["default"] == 0
+    assert not list(tmp_path.glob("*.mka"))

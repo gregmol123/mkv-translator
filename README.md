@@ -17,6 +17,7 @@ Tłumaczy napisy filmów i seriali (rosyjskie, angielskie, ukraińskie) na **pol
 
 - Windows, Python 3.12+ (program główny używa tylko biblioteki standardowej)
 - [ffmpeg](https://ffmpeg.org) w `PATH`
+- opcjonalnie [MKVToolNix](https://mkvtoolnix.download) — gdy jest zainstalowany, plik MKV składa mkvmerge (wierniej zachowuje rozdziały, załączniki i flagi ścieżek)
 - [Ollama](https://ollama.com) z modelem tłumaczącym — domyślny `gemma4:31b` (w teście na dwóch serialach wypadł lepiej niż `translategemma:27b`); dużym modelom najlepiej służy karta z 24–32 GB pamięci
 - Funkcje audio (rozpoznawanie mowy, OCR, lektor): karta NVIDIA i [uv](https://docs.astral.sh/uv/) — `install_audio.bat` tworzy środowisko `audio_env` (ok. 6 GB, modele ok. 5 GB dociągają się przy pierwszym użyciu)
 

@@ -19,6 +19,7 @@ EN = {
     'narzędzie audio zakończyło się błędem: {0} (pełny opis w audio_blad.txt)': 'audio tool failed: {0} (full details in audio_blad.txt)',
     'ffmpeg nie wyodrębnił napisów: {0}': 'ffmpeg could not extract subtitles: {0}',
     'ffmpeg nie złożył pliku MKV: {0}': 'ffmpeg could not build the MKV file: {0}',
+    'mkvmerge nie złożył pliku MKV: {0}': 'mkvmerge could not build the MKV file: {0}',
     'brak JSON w odpowiedzi': 'no JSON in the response',
     'Ollama nie odpowiada pod {0} — uruchom Ollamę i spróbuj ponownie': 'Ollama is not responding at {0} — start Ollama and try again',
     'info   równoległych zapytań Ollamy (OLLAMA_NUM_PARALLEL): {0}': 'info   Ollama parallel requests (OLLAMA_NUM_PARALLEL): {0}',

@@ -1,6 +1,6 @@
 # Plan prac — MKV Translator
 
-Stan na 21.11.2026, 20:56. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
+Stan na 21.11.2026, 21:10. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
 
 ## Zrobione
 
@@ -80,4 +80,4 @@ _ok. 2–3 dni mojej pracy_
 - [x] **D2** Testy automatyczne (pytest) + test na 30-sekundowym MKV — M, ok. 4 h — zrobione 21.11 21:40
 - [x] **D3** Kontekst pliku zamiast stanu globalnego; ta sama ścieżka audio dla lektora i rozpoznawania — M, ok. 4 h — zrobione 21.11 22:00
 - [x] **D4** Podział programu na moduły; kopia dla Unraid generowana skryptem — L, 1–2 dni — zrobione 21.11 21:30
-- [ ] **D5** Składanie MKV przez mkvmerge zamiast ffmpeg — M, ok. 4 h
+- [x] **D5** Składanie MKV przez mkvmerge zamiast ffmpeg — M, ok. 4 h — zrobione 21.11 22:20
