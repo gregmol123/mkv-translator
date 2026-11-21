@@ -1079,6 +1079,43 @@ def tts(args):
     print(tr('    lektor: {0} kwestii, przyspieszono {1}', len(cues), sped))
 
 
+QE_MODEL = "google/metricx-24-hybrid-xl-v2p6-bfloat16"   # ocena tłumaczenia bez wzorca (C5), Apache-2.0
+QE_TOKENIZER = "google/mt5-xl"
+QE_TOKEN = 250089                             # logit tego tokenu to wynik MetricX (0 = idealnie, 25 = źle)
+
+
+def qe(args):
+    """C5: MetricX-24 w trybie bez wzorca ("source: ... candidate: ..."): plik JSON z parami [oryginał, tłumaczenie]
+    -> plik JSON z wynikami 0–25 (mniej = lepiej)."""
+    import torch
+    from transformers import AutoTokenizer, MT5ForConditionalGeneration
+    device = use_torch_cuda_libs()
+
+    def load():
+        print(tr('    ocena jakości tłumaczenia ({0}) — wczytuję model...', QE_MODEL), flush=True)
+        tok = AutoTokenizer.from_pretrained(QE_TOKENIZER)
+        model = MT5ForConditionalGeneration.from_pretrained(QE_MODEL, torch_dtype=torch.bfloat16).to(device).eval()
+        return tok, model
+
+    tok, model = cached(("qe", device), load)
+    pairs = json.loads(Path(args.pairs).read_text(encoding="utf-8"))
+    scores = []
+    for pos in range(0, len(pairs), 32):
+        batch = [f"source: {src} candidate: {hyp}" for src, hyp in pairs[pos:pos + 32]]
+        enc = tok(batch, max_length=256, truncation=True, padding=True, return_tensors="pt")
+        ids, mask = enc["input_ids"].to(device), enc["attention_mask"].to(device)
+        # MetricX bez końcowego tokenu EOS (tak był uczony): ostatni niezerowy token każdej linii wycinamy maską
+        last = mask.sum(1) - 1
+        mask[torch.arange(len(batch)), last] = 0
+        with torch.inference_mode():
+            out = model(input_ids=ids, attention_mask=mask,
+                        decoder_input_ids=torch.zeros((len(batch), 1), dtype=torch.long, device=device))
+        scores += out.logits[:, 0, QE_TOKEN].float().clamp(0, 25).tolist()
+        print(tr('\r    ocena jakości: {0}/{1}', min(pos + 32, len(pairs)), len(pairs)), end="", flush=True)
+    print()
+    Path(args.out).write_text(json.dumps([round(x, 2) for x in scores]), encoding="utf-8")
+
+
 def free(args=None):
     """Zwalnia modele z pamięci karty — przed tłumaczeniem dużym modelem w Ollamie (proces zostaje)."""
     if not _models:
@@ -1138,6 +1175,9 @@ def main():
     d.add_argument("out")
     d.add_argument("--model", default=WHISPER_MODEL)
     d.add_argument("--windows", type=int, default=1, help=tr('ile 30-sekundowych próbek zawiera plik (informacyjnie)'))
+    q = sub.add_parser("qe")
+    q.add_argument("pairs")
+    q.add_argument("out")
     sub.add_parser("check")
     sub.add_parser("free", help=tr('zwolnij modele z pamięci karty (tryb serve)'))
     sub.add_parser("serve", help=tr('praca ciągła: polecenia (JSON, po jednym w wierszu) czytane z wejścia, modele zostają w pamięci między plikami'))
@@ -1164,9 +1204,9 @@ def serve(ap):
             argv = json.loads(line)
             sys.argv = [sys.argv[0], *argv]   # do opisu w audio_blad.txt
             args = ap.parse_args(argv)
-            if args.cmd not in ("transcribe", "tts", "detect", "ocr", "free"):
+            if args.cmd not in ("transcribe", "tts", "detect", "ocr", "free", "qe"):
                 raise ValueError(tr('polecenie {0} nie działa w trybie serve', args.cmd))
-            {"transcribe": transcribe, "tts": tts, "detect": detect, "ocr": ocr, "free": free}[args.cmd](args)
+            {"transcribe": transcribe, "tts": tts, "detect": detect, "ocr": ocr, "free": free, "qe": qe}[args.cmd](args)
         except SystemExit as e:               # sys.exit("opis") w poleceniach i błędy argparse
             if e.code not in (None, 0):
                 code, message = 1, str(e.code)

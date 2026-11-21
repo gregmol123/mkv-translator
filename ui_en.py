@@ -422,4 +422,11 @@ EN = {
     'Co nowego — MKV Translator {0}': "What's new — MKV Translator {0}",
     'Zamknij': 'Close',
     'Historia zmian jest na GitHubie: https://github.com/gregmol123/mkv-translator/blob/main/CHANGELOG.md': 'The changelog is on GitHub: https://github.com/gregmol123/mkv-translator/blob/main/CHANGELOG.md',
+    'zapis wg polskich norm: poprawiono {0} kwestii (wielokropek, cudzysłowy, myślniki, godziny)': 'Polish subtitle norms: fixed {0} cues (ellipsis, quotes, dashes, times)',
+    'ocena jakości tłumaczenia ({0}) — wczytuję model...': 'translation quality estimation ({0}) — loading model...',
+    'ocena jakości: {0}/{1}': 'quality estimation: {0}/{1}',
+    'ocena jakości (MetricX): średnio {0:.1f} (0 = idealnie, 25 = źle), słabych kwestii: {1}': 'quality estimation (MetricX): mean {0:.1f} (0 = perfect, 25 = bad), weak cues: {1}',
+    ', MetricX średnio {0:.1f}': ', MetricX mean {0:.1f}',
+    'ocena jakości pominięta ({0})': 'quality estimation skipped ({0})',
+    'tłumaczenie całymi zdaniami: {0} kwestii w {1} zdaniach': 'translating whole sentences: {0} cues in {1} sentences',
 }

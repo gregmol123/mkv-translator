@@ -1,6 +1,6 @@
 # Plan prac — MKV Translator
 
-Stan na 21.11.2026, 18:49. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
+Stan na 21.11.2026, 19:27. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
 
 ## Zrobione
 
@@ -18,6 +18,7 @@ Stan na 21.11.2026, 18:49. Źródło: raport `reports/Ulepszenia MKV Translatora
 - [x] Etap 2, pomiary na 12 fragmentach (błąd słów; obecne GigaAM+Demucs 13,1%): B2 GigaAM v3 RNNT 11,9% (bez interpunkcji), Multilingual 14,8%; B3 cięcie w ciszy 13,5%; B5 Silero v6 13,5%; B6 BS-RoFormer 14,1% (3,6× wolniej), domieszka oryginału 14,9% — bez zysku, zostają jako opcje; B4 nowy podział na kwestie (normy Netflix PL) w użyciu, błąd bez zmian; B7 pewność kwestii w raporcie jakości; B9 RNNT + interpunkcja z modelu językowego 12,0% (opcja GigaAM-RNNT); B10 wyrównanie czasów: Whisper 275→153 ms; B11 Whisper w partiach 12,1% i 9× szybciej — domyślne dla Whispera razem z wyrównaniem; Parakeet 20% (słaby dla rosyjskiego) — 21.11
 - [x] B8 wersja 2: dwa pełne zapisy (GigaAM + Whisper w partiach z wyrównaniem), model językowy wybiera lepszy na każdą minutę — 10,8% wobec 13,2%, czasy 123 ms, mniej widm; domyślny silnik „GigaAM+Whisper” (ok. 3,5× dłuższe rozpoznawanie) — 21.11
 - [x] B12: rozpoznawanie mówców pyannote community-1 (token HF_TOKEN), myślniki dialogowe, płeć z wysokości głosu w poleceniu dla tłumacza; próba Gorkij 53: 6 mówców (1 K, 5 M) — 21.11
+- [x] Etap 3: C3 płeć z form rosyjskich + pole plec w słowniczku; C4 polskie normy zapisu; C5 MetricX-24 XL (dobre 2,0–2,5, złe 13) z naprawą ≥ 8; C7 tłumaczenie zdaniami przy rozpoznanej mowie (MetricX 5,21 wobec 5,59) — 21.11
 
 ## Do decyzji (Ty)
 
@@ -64,11 +65,11 @@ _ok. 2–3 dni mojej pracy_
 
 - [x] **C1** Kontekst: 3–4 kwestie następne + ostatnie 5 par oryginał→tłumaczenie — M, ok. 4 h — zrobione 21.11 16:04
 - [x] **C2** Streszczenie filmu/odcinka generowane raz i dodawane do każdej partii — S, ok. 1 h — zrobione 21.11 16:06
-- [ ] **C3** Płeć mówiących (zrobiłem/zrobiłam): wnioskowanie z form rosyjskich + pole w słowniczku — S, ok. 1 h
-- [ ] **C4** Polskie normy zapisu: „…”, cudzysłowy „”, myślniki dialogowe, godziny 14.15 — S, ok. 1 h
-- [ ] **C5** Ocena jakości bez wzorca: MetricX-24 + sprawdzenie języka wyniku; najgorsze kwestie do naprawy — M, ok. 4 h
+- [x] **C3** Płeć mówiących (zrobiłem/zrobiłam): wnioskowanie z form rosyjskich + pole w słowniczku — S, ok. 1 h — zrobione 21.11 19:30
+- [x] **C4** Polskie normy zapisu: „…”, cudzysłowy „”, myślniki dialogowe, godziny 14.15 — S, ok. 1 h — zrobione 21.11 19:30
+- [x] **C5** Ocena jakości bez wzorca: MetricX-24 + sprawdzenie języka wyniku; najgorsze kwestie do naprawy — M, ok. 4 h — zrobione 21.11 19:40
 - [ ] **C6** Porównanie modeli na Twoich filmach: gemma4:31b kontra MiLMMT-46-12B — M, ok. 4 h
-- [ ] **C7** Tłumaczenie pełnymi zdaniami z rozpoznanej mowy i podział z powrotem wg czasu — L, 1–2 dni
+- [x] **C7** Tłumaczenie pełnymi zdaniami z rozpoznanej mowy i podział z powrotem wg czasu — L, 1–2 dni — zrobione 21.11 19:55
 
 ## Etap 4 – utrzymanie
 

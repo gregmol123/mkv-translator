@@ -111,6 +111,9 @@ Zasady:
 - naturalna, żywa polszczyzna mówiona, zwięzła jak w napisach kinowych; nie tłumacz dosłownie idiomów,
 - zachowaj ton, rejestr i wulgaryzmy oryginału,
 - imiona i nazwy własne zapisuj w polskiej transkrypcji (np. Сергей -> Siergiej),
+- płeć mówiącego i osób, o których mowa, odczytuj z form oryginału (сделал/сделала, я рад/рада, сам/сама)
+i zachowuj w polskim (zrobiłem/zrobiłam, cieszę się, sam/sama); gdy oryginał nie rozstrzyga, trzymaj się
+wcześniejszych kwestii tej samej osoby,
 - zachowaj myślnik na początku kwestii dialogowej, jeśli jest w oryginale,
 - każda kwestia to osobna wartość: nie łącz, nie dziel i nie pomijaj kwestii,
 - pola pomocnicze (jeśli występują) są tylko do wglądu — nie tłumacz ich i nie zwracaj: "kontekst" to kwestie \
@@ -135,6 +138,7 @@ Rules:
 - natural, idiomatic spoken English, concise like cinema subtitles; do not translate idioms literally,
 - keep the tone, register and profanity of the original,
 - write names in standard English transliteration (e.g. Сергей -> Sergei),
+- infer speakers' and referents' gender from the source forms (сделал/сделала, рад/рада) and keep pronouns consistent,
 - keep a leading dash of a dialogue line if the original has one,
 - every cue is a separate value: do not merge, split or skip cues,
 - helper fields (if present) are for reference only — do not translate or return them: "kontekst" holds the cues \
@@ -205,7 +209,9 @@ def glossary_prompt_names(path):
     picked = [(k, e) for k, e in names.items()
               if e.get("pisownia") and (e.get("zablokuj") or sum(e.get("warianty", {}).values()) >= 2)]
     picked.sort(key=lambda ke: (not ke[1].get("zablokuj"), -sum(ke[1].get("warianty", {}).values())))
-    return {k: e["pisownia"] for k, e in picked[:GLOSSARY_PROMPT_LIMIT]}
+    # pole "plec" (K/M) wpisane przez użytkownika w słowniczku — model wie, czy postać to kobieta czy mężczyzna
+    return {k: e["pisownia"] + (f" ({e['plec']})" if e.get("plec") in ("K", "M") else "")
+            for k, e in picked[:GLOSSARY_PROMPT_LIMIT]}
 
 
 # częste słowa angielskie, których nie ma w polszczyźnie (bez "to", "do", "i" — są też polskie)
@@ -369,7 +375,7 @@ def run_helper(args):
     Rozpoznawanie mowy i lektor idą przez stały proces (tryb "serve"): Demucs, GigaAM i głosy wczytują się
     raz na całą kolejkę zamiast przy każdym pliku. MKV_AUDIO_PERSIST=0 wyłącza ten tryb.
     """
-    if args[0] in ("transcribe", "tts", "detect", "ocr", "free") and os.environ.get("MKV_AUDIO_PERSIST", "1") != "0":
+    if args[0] in ("transcribe", "tts", "detect", "ocr", "free", "qe") and os.environ.get("MKV_AUDIO_PERSIST", "1") != "0":
         with _helper_lock:
             return run_persistent(args)
     base, env = helper_command()
@@ -750,6 +756,8 @@ class OllamaEngine:
         self.model = model
         self.name = f"Ollama ({model})"
         self.line_mode = "translategemma" in model.lower()
+        # C6: modele tłumaczące bez czatu (MiLMMT) — surowe zapytanie w formacie z karty modelu, kwestia po kwestii
+        self.raw_mode = "milmmt" in model.lower()
         self.think_off = not self.line_mode
         self.use_format = True
         names = ensure_ollama()
@@ -853,7 +861,22 @@ class OllamaEngine:
                 continue
         return [t for t, _ in items]
 
+    def _raw(self, text):
+        """Jedna kwestia w formacie MiLMMT: "Translate this from X to Y:\nX: tekst\nY:" (/api/generate, raw)."""
+        src, dst = LANGS[self.lang][0], TARGETS[OUT["code"]][0]
+        body = {"model": self.model, "raw": True, "stream": False, "options": {"num_ctx": 2048, "stop": ["\n"]},
+                "prompt": f"Translate this from {src} to {dst}:\n{src}: {' '.join(text.split())}\n{dst}:"}
+        req = urllib.request.Request(f"{OLLAMA_URL}/api/generate", data=json.dumps(body).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                return json.load(r).get("response", "").strip()
+        except (urllib.error.URLError, OSError) as e:
+            raise OllamaDown(tr('utracono połączenie z Ollamą: {0}', e))
+
     def translate(self, texts, context=()):
+        if self.raw_mode:
+            return [self._raw(t) for t in texts]
         if self.line_mode:
             return self._marked(texts) if len(texts) > 1 else [" ".join(self._lines(texts[0]))]
         if not self.line_mode:
@@ -1045,7 +1068,8 @@ def load_glossary(path):
 
 def save_glossary(path, names):
     data = {"opis": "Pisownia imion i nazw w tym serialu. Program wybiera najczęstszy wariant; żeby narzucić "
-                    "własny, wpisz go w \"pisownia\" i ustaw \"zablokuj\": true.",
+                    "własny, wpisz go w \"pisownia\" i ustaw \"zablokuj\": true. Pole \"plec\": \"K\" albo "
+                    "\"M\" mówi tłumaczowi, czy postać to kobieta, czy mężczyzna.",
             "imiona": dict(sorted(names.items()))}
     try:
         tmp = path.with_name(path.name + ".tmp")
@@ -1238,11 +1262,12 @@ def repair_engine(main):
     return _repair["engine"]
 
 
-def repair_segments(flat, done, engine, lang):
+def repair_segments(flat, done, engine, lang, extra=()):
     """Ponownie tłumaczy podejrzane kwestie: najpierw pojedynczo tym samym modelem, potem modelem ogólnym
-    z kontekstem poprzednich kwestii. Zwraca (tłumaczenia, poprawione, podejrzane)."""
+    z kontekstem poprzednich kwestii. extra: dodatkowe podejrzane (np. najgorsze wg MetricX).
+    Zwraca (tłumaczenia, poprawione, podejrzane)."""
     done = list(done)
-    bad = [i for i in range(len(flat)) if segment_issues(flat[i], done[i], lang)]
+    bad = sorted({i for i in range(len(flat)) if segment_issues(flat[i], done[i], lang)} | set(extra))
     if not bad:
         return done, 0, 0
     if len(bad) > 20 and len(bad) > 0.4 * len(flat):
@@ -1332,6 +1357,128 @@ CONTEXT_NEXT, CONTEXT_PAIRS = 4, 5          # kwestie po partii i gotowe pary t�
 SUMMARY_MIN_CUES = 60                         # krótsze pliki tłumaczą się bez streszczenia
 
 
+TIME_RE = re.compile(r"(?<![\d:.])([01]?\d|2[0-3]):([0-5]\d)(?![\d:])")
+QUOTE_RE = re.compile(r'"([^"\n]+)"|«([^»\n]+)»|“([^”\n]+)”')
+DIALOG_DASH_RE = re.compile(r"^\s*[—–]\s*", re.M)
+
+
+def polish_norms(cues):
+    """C4: zapis wg polskich norm napisów (Netflix PL): wielokropek jednym znakiem, cudzysłowy „…”, myślnik
+    dialogowy "- " na początku wypowiedzi, godziny z kropką (14.15). Zwraca (kwestie, liczba poprawionych)."""
+    out, changed = [], 0
+    for cue in cues:
+        text = cue.text.replace("...", "…")
+        text = QUOTE_RE.sub(lambda m: "„" + (m.group(1) or m.group(2) or m.group(3)) + "”", text)
+        text = DIALOG_DASH_RE.sub("- ", text)
+        text = TIME_RE.sub(lambda m: f"{m.group(1)}.{m.group(2)}", text)
+        if text != cue.text:
+            changed += 1
+            cue = Cue(cue.start, cue.end, cue.extra, text)
+        out.append(cue)
+    return out, changed
+
+
+QE_BAD = 8.0                                  # wynik MetricX (0–25), od którego kwestia idzie do naprawy
+
+
+def qe_score(pairs):
+    """C5: wyniki MetricX-24 dla par (oryginał, tłumaczenie) albo None, gdy ocena niedostępna (brak audio_env,
+    MKV_QE=0, błąd). Na czas oceny Ollama zwalnia kartę, a po niej model oceny jest zwalniany."""
+    if not pairs or os.environ.get("MKV_QE", "1") == "0":
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        src, out = Path(tmp) / "pary.json", Path(tmp) / "oceny.json"
+        src.write_text(json.dumps(pairs, ensure_ascii=False), encoding="utf-8")
+        try:
+            ollama_unload()
+            run_helper(["qe", src, out])
+            free_helper()
+            scores = json.loads(out.read_text(encoding="utf-8"))
+        except (FatalError, ToolDown, OSError, ValueError) as e:
+            print(tr('    ocena jakości pominięta ({0})', e))
+            return None
+    return scores if len(scores) == len(pairs) else None
+
+
+SENTENCE_END = (".", "!", "?", "…")
+SENTENCE_MAX_CUES, SENTENCE_MAX_CHARS = 4, 220
+
+
+def cue_seconds(stamp):
+    h, m, s = stamp.replace(",", ".").split(":")
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def sentence_groups(cues):
+    """C7: kolejne kwestie składające się na jedno zdanie (rozpoznana mowa tnie zdania między kwestie).
+    Kwestie z myślnikami dialogowymi i kwestie po dłuższej pauzie nie są łączone."""
+    groups, cur = [], []
+    for k, cue in enumerate(cues):
+        text = cue.text.strip()
+        if "\n" in text or DIALOG_RE.match(text):
+            if cur:
+                groups.append(cur)
+            groups.append([k])
+            cur = []
+            continue
+        cur.append(k)
+        pause = k + 1 < len(cues) and cue_seconds(cues[k + 1].start) - cue_seconds(cue.end) > 1.5
+        if text.endswith(SENTENCE_END) or pause or len(cur) >= SENTENCE_MAX_CUES \
+                or sum(len(cues[j].text) for j in cur) >= SENTENCE_MAX_CHARS:
+            groups.append(cur)
+            cur = []
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def split_translation(text, weights):
+    """Dzieli przetłumaczone zdanie na len(weights) części proporcjonalnie do długości oryginalnych kwestii;
+    tnie między słowami, chętniej po przecinku, kropce lub myślniku."""
+    words = text.split()
+    if len(weights) == 1 or len(words) < len(weights):
+        return [text] + [""] * (len(weights) - 1) if len(words) < len(weights) else [text]
+    ends, pos = [], 0
+    for w in words:
+        pos += len(w) + 1
+        ends.append(pos)
+    total, cuts, acc, last = sum(weights), [], 0, 0
+    for w in weights[:-1]:
+        acc += w
+        target = acc / total * ends[-1]
+        options = range(last + 1, len(words) - (len(weights) - len(cuts) - 1) + 1)
+        best = min(options, key=lambda i: abs(ends[i - 1] - target)
+                   - (0.12 * ends[-1] if words[i - 1].endswith((",", ".", "!", "?", "…", ";", ":", "—")) else 0))
+        cuts.append(best)
+        last = best
+    bounds = [0, *cuts, len(words)]
+    return [" ".join(words[a:b]) for a, b in zip(bounds, bounds[1:])]
+
+
+def translate_sentences(cues, engine, checkpoint=None, resume=True, glossary=None, quality=None, speakers=None):
+    """C7: tłumaczenie rozpoznanej mowy całymi zdaniami — zdanie rozcięte między kwestie idzie do modelu w całości,
+    a tłumaczenie wraca do tych samych kwestii i czasów. Mniej przesunięć i urwanych zdań niż kwestia po kwestii."""
+    groups = sentence_groups(cues)
+    if all(len(g) == 1 for g in groups):
+        return translate_cues(cues, engine, checkpoint, resume, glossary, quality, speakers)
+    merged = [Cue(cues[g[0]].start, cues[g[-1]].end, cues[g[0]].extra,
+                  " ".join(" ".join(cues[k].text.split()) for k in g) if len(g) > 1 else cues[g[0]].text) for g in groups]
+    spk = None
+    if speakers and len(speakers) == len(cues):
+        spk = [speakers[g[0]] if all(speakers[k] == speakers[g[0]] for k in g) else [] for g in groups]
+    print(tr('    tłumaczenie całymi zdaniami: {0} kwestii w {1} zdaniach', len(cues), len(groups)))
+    done = translate_cues(merged, engine, checkpoint, resume, glossary, quality, spk)
+    result = []
+    for g, unit in zip(groups, done):
+        if len(g) == 1:
+            result.append(Cue(cues[g[0]].start, cues[g[0]].end, cues[g[0]].extra, unit.text))
+            continue
+        parts = split_translation(" ".join(unit.text.split()), [max(1, len(cues[k].text)) for k in g])
+        result += [Cue(cues[k].start, cues[k].end, cues[k].extra, wrap(p) if p else "…") for k, p in zip(g, parts)]
+    result, _ = retime(result)
+    return result
+
+
 def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, quality=None, speakers=None):
     """Tłumaczy kwestie; postęp zapisuje po każdej partii w pliku checkpoint, żeby dało się wznowić.
 
@@ -1348,6 +1495,7 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
             gender.append(who.get("p"))
     # kwestie bez liter (np. "...", "♪") zostają bez zmian
     todo = [i for i, t in enumerate(flat) if any(c.isalpha() for c in t)]
+    todo_all = list(todo)                     # wszystkie kwestie do tłumaczenia (todo maleje przy wznowieniu)
     done = list(flat)
     saved = load_checkpoint(checkpoint, flat) if checkpoint and resume else {}
     if saved:
@@ -1361,7 +1509,8 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
     engine.names = glossary_prompt_names(glossary) if lang in ("ru", "uk") else None
     engine.summary = None
     # streszczenie odcinka (C2): raz na plik, jako tło w każdej partii; TranslateGemma ma stały format zapytania
-    if (hasattr(engine, "summarize") and not getattr(engine, "line_mode", False) and len(todo) >= SUMMARY_MIN_CUES
+    if (hasattr(engine, "summarize") and not getattr(engine, "line_mode", False) and not getattr(engine, "raw_mode", False)
+            and len(todo) >= SUMMARY_MIN_CUES
             and os.environ.get("MKV_SUMMARY", "1") != "0"):
         engine.summary = engine.summarize([flat[i] for i in todo])
         if engine.summary:
@@ -1401,8 +1550,15 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
     if checkpoint:
         checkpoint.unlink(missing_ok=True)
     repaired = shortened = 0
+    qe_bad, qe_scores = [], None
+    if quality is not None:                   # C5: ocena każdej kwestii bez wzorca (MetricX-24)
+        qe_scores = qe_score([(flat[i], done[i]) for i in todo_all])
+        if qe_scores:
+            qe_bad = [i for i, sc in zip(todo_all, qe_scores) if sc >= QE_BAD]
+            print(tr('    ocena jakości (MetricX): średnio {0:.1f} (0 = idealnie, 25 = źle), słabych kwestii: {1}',
+                     sum(qe_scores) / len(qe_scores), len(qe_bad)))
     if quality is not None:                   # automatyczna naprawa podejrzanych kwestii
-        done, repaired, suspicious = repair_segments(flat, done, engine, lang)
+        done, repaired, suspicious = repair_segments(flat, done, engine, lang, qe_bad)
         if suspicious:
             print(tr('    naprawa: poprawiono {0} z {1} podejrzanych kwestii', repaired, suspicious))
     left = sum(still_source(done[i], lang) for i in range(len(flat)) if any(c.isalpha() for c in flat[i]))
@@ -1417,6 +1573,10 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
         translated = done[k:k + len(segs)]
         k += len(segs)
         result.append(Cue(cue.start, cue.end, cue.extra, join_cue(prefix, italic, translated)))
+    if OUT["code"] == "pl":                  # C4: polskie normy zapisu napisów
+        result, normed = polish_norms(result)
+        if normed:
+            print(tr('    zapis wg polskich norm: poprawiono {0} kwestii (wielokropek, cudzysłowy, myślniki, godziny)', normed))
     result, longer = retime(result)
     if longer:
         print(tr('    czas wyświetlania: wydłużono {0} kwestii za krótkich do przeczytania', longer))
@@ -1424,6 +1584,8 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
         result, shortened = shorten_fast(result, engine)   # tylko gdy za szybkich jest wyraźnie za dużo
     if quality is not None:
         verdict, summary, examples = quality_check(flat, done, result, lang)
+        if qe_scores:
+            summary += tr(', MetricX średnio {0:.1f}', sum(qe_scores) / len(qe_scores))
         if repaired or shortened:
             summary += tr(' (naprawiono automatycznie: {0} kwestii, skrócono {1})', repaired, shortened)
         quality.update(verdict=verdict, summary=summary)
@@ -2252,6 +2414,7 @@ def process(mkv, args, engine):
             print(tr('    używam gotowych napisów z filmu ({0})', srt_out.name))
         else:
             source = getattr(args, "source", "ru")
+            from_speech = False               # C7: kwestie z rozpoznanej mowy tłumaczymy całymi zdaniami
             try:
                 cues, lang = pick_source_cues(mkv, streams, args.track, tmp, source)
             except FatalError as e:
@@ -2262,6 +2425,7 @@ def process(mkv, args, engine):
                         raise
                     print(tr('    {0} — rozpoznaję mowę z dźwięku', e))
                     found = transcribe(mkv, audio, args, tmp, engine)
+                    from_speech = True
                 cues, lang = found
             else:
                 # napisy szczątkowe (np. sama ścieżka "Forced" albo urwane): poniżej 1,5 kwestii na minutę
@@ -2273,11 +2437,14 @@ def process(mkv, args, engine):
                         spoken, spoken_lang = transcribe(mkv, audio, args, tmp, engine)
                         if len(spoken) > len(cues):
                             cues, lang = spoken, spoken_lang
+                            from_speech = True
                     except FatalError as e:
                         print(tr('    rozpoznawanie mowy nie powiodło się ({0}) — zostają napisy z pliku', e))
             engine.lang = lang
-            write_srt(translate_cues(cues, engine, part, args.resume or not args.force,
-                                     glossary_file(mkv), quality, ASR_INFO.get("speakers")), srt_out)
+            translate = translate_sentences if from_speech and os.environ.get("MKV_SENTENCES", "1") != "0" \
+                else translate_cues
+            write_srt(translate(cues, engine, part, args.resume or not args.force,
+                                glossary_file(mkv), quality, ASR_INFO.get("speakers")), srt_out)
             if ASR_INFO.get("unsure"):        # B7: niepewne rozpoznanie mowy w ocenie pliku
                 quality["summary"] += tr(', niepewne rozpoznanie mowy: {0} kwestii', ASR_INFO["unsure"])
                 if ASR_INFO["unsure"] > ASR_UNSURE_SHARE * ASR_INFO["total"]:
