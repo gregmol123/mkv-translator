@@ -384,4 +384,9 @@ EN = {
     'w próbkach dźwięku nie wykryto mowy': 'no speech found in the audio samples',
     'ile 30-sekundowych próbek zawiera plik (informacyjnie)': 'how many 30-second samples the file contains (informational)',
     'zwolnij modele z pamięci karty (tryb serve)': 'release models from GPU memory (serve mode)',
+    'oryginał zachowany jako {0} (zostanie usunięty po {1} dniach)': 'original kept as {0} (will be deleted after {1} days)',
+    'Usunięto {0} starych kopii oryginałów (.orig.mkv)': 'Deleted {0} old original backups (.orig.mkv)',
+    'przy podmianie oryginału zostaw go jako <nazwa>.orig.mkv przez DNI dni (0 = bez kopii)': 'when replacing the original, keep it as <name>.orig.mkv for DNI days (0 = no backup)',
+    'kopia oryginału .orig.mkv przez': 'keep original as .orig.mkv for',
+    'dni': 'days',
 }

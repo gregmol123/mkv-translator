@@ -1537,6 +1537,59 @@ def attachment_count(path):
     return len(probe_streams(path, "t"))
 
 
+BACKUP_LOG = APP_DIR / "kopie_oryginalow.json"   # kopie .orig.mkv zrobione przez program (tylko te są kasowane)
+_backup_lock = threading.Lock()
+
+
+def keep_backup(mkv, days):
+    """Przed podmianą: oryginał zostaje jako <nazwa>.orig.mkv (zmiana nazwy — bez kopiowania, natychmiast).
+    Program kasuje go sam po `days` dniach; days = 0 wyłącza kopię."""
+    if not days:
+        return
+    backup = mkv.with_suffix(".orig.mkv")
+    if backup.exists():                       # starsza kopia tego samego pliku — zostaje najstarszy oryginał
+        return
+    os.replace(mkv, backup)
+    with _backup_lock:
+        log = _read_backups()
+        log[str(backup)] = time.time() + days * 86400
+        _write_backups(log)
+    print(tr('    oryginał zachowany jako {0} (zostanie usunięty po {1} dniach)', backup.name, days))
+
+
+def prune_backups():
+    """Kasuje kopie .orig.mkv, którym minął termin (tylko te zapisane w kopie_oryginalow.json)."""
+    with _backup_lock:
+        log, now, removed = _read_backups(), time.time(), 0
+        for path, until in list(log.items()):
+            if until <= now:
+                try:
+                    Path(path).unlink(missing_ok=True)
+                    removed += 1
+                except OSError:
+                    continue                  # np. dysk sieciowy wyłączony — spróbujemy przy następnym starcie
+                del log[path]
+        if removed:
+            _write_backups(log)
+            print(tr('Usunięto {0} starych kopii oryginałów (.orig.mkv)', removed))
+
+
+def _read_backups():
+    try:
+        return json.loads(BACKUP_LOG.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_backups(log):
+    try:
+        tmp = BACKUP_LOG.with_name(BACKUP_LOG.name + ".tmp")
+        tmp.write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, BACKUP_LOG)
+    except OSError:
+        pass
+
+
 def check_remux(mkv, new, audio=None, subs=None):
     """Zanim nowy plik zastąpi oryginał: musi dać się odczytać, mieć tę samą długość, te same ścieżki obrazu
     i rozdziały oraz oczekiwaną liczbę ścieżek dźwięku i napisów (audio/subs; None = bez sprawdzania)."""
@@ -2005,8 +2058,12 @@ def process(mkv, args, engine):
                 want_subs = len(streams) - len(old_subs) + bool(new_srt)
                 check_remux(mkv, mkv_out, want_audio, want_subs)
                 try:
+                    keep_backup(mkv, getattr(args, "backup_days", 0))
                     os.replace(mkv_out, mkv)
                 except OSError as e:              # np. film otwarty w odtwarzaczu
+                    backup = mkv.with_suffix(".orig.mkv")
+                    if not mkv.exists() and backup.exists():
+                        os.replace(backup, mkv)       # oryginał wraca pod swoją nazwę
                     mkv_out.unlink(missing_ok=True)
                     raise FatalError(tr('nie da się podmienić oryginału ({0}) — oryginał pozostał bez zmian', e))
                 shutil.rmtree(voice_part, ignore_errors=True)
@@ -2317,7 +2374,7 @@ def collect(paths, recursive):
             found = [f for f in found if DONE_DIR not in f.relative_to(p).parts[:-1]]   # gotowe już przeniesione
             for f in found:
                 if f.suffix.lower() in VIDEO_EXTS and not f.name.lower().endswith(
-                        (".pl.mkv", ".pl.tmp.mkv", ".en.mkv", ".en.tmp.mkv")):
+                        (".pl.mkv", ".pl.tmp.mkv", ".en.mkv", ".en.tmp.mkv", ".orig.mkv")):
                     videos.setdefault(f.parent, []).append(f.stem.lower())
                     files.append(f)
             files += [f for f in found if f.is_file() and is_standalone_sub(f, videos.get(f.parent, ()))]
@@ -2370,6 +2427,7 @@ def watch(args):
     engine = None
     print(tr('Praca ciągła: {0}; co {1:g} min; Ollama: {2}', ', '.join(args.paths), args.watch, OLLAMA_URL), flush=True)
     while True:
+        prune_backups()                       # kopie .orig.mkv, którym minął termin
         todo = []
         for f in collect(args.paths, True):
             try:
@@ -2419,6 +2477,8 @@ def main():
                     help=tr('ile partii tłumaczyć naraz w Ollamie (domyślnie 2; wymaga OLLAMA_NUM_PARALLEL >= tej liczby)'))
     ap.add_argument("--model", help=tr('model Ollamy, np. gemma4:31b (domyślnie {0}; dla --engine claude: {1})', OLLAMA_MODEL, CLAUDE_MODEL))
     ap.add_argument("--mux", action="store_true", help=tr('dodaj polskie napisy wprost do pliku MKV'))
+    ap.add_argument("--backup-days", type=int, default=0, metavar="DNI",
+                    help=tr('przy podmianie oryginału zostaw go jako <nazwa>.orig.mkv przez DNI dni (0 = bez kopii)'))
     ap.add_argument("--keep-original", action="store_true",
                     help=tr('z --mux/--lektor: nie zmieniaj oryginału, zapisz kopię <nazwa>.pl.mkv'))
     ap.add_argument("--whisper", action="store_true",
@@ -2465,6 +2525,7 @@ def main():
     args = ap.parse_args()
     args.replace = not args.keep_original
     set_repair_model(args.repair_model)
+    prune_backups()
     args.resume = args.restart = False        # przerwane tłumaczenie wznawia się samo, chyba że --force
     if args.watch:
         return watch(args)
@@ -2576,7 +2637,7 @@ class QueueApp:
     # opcje okna zapisywane razem z kolejką
     SAVED_OPTIONS = ("recursive", "model", "mux", "keep", "force", "whisper", "asr", "separate",
                      "lektor", "voice", "replace_audio", "parallel", "move_done", "notify_toast", "ntfy_topic",
-                     "source", "target", "repair_model", "whisper_model")
+                     "source", "target", "repair_model", "whisper_model", "backup", "backup_days")
     # listy wyboru, w których okno pokazuje tekst w swoim języku, a kolejka zapisuje klucz (tekst polski)
     AUTO = "automatycznie"
     CHOICE_OPTIONS = {"source": SOURCE_CHOICES, "target": TARGET_CHOICES, "lektor": ("brak",), "repair_model": (AUTO,)}
@@ -2754,6 +2815,14 @@ class QueueApp:
         check(g, 0, tr('wbuduj napisy do pliku MKV'), self.mux)
         check(g, 1, tr('zostaw oryginał (kopia .pl.mkv / .en.mkv)'), self.keep)
         check(g, 2, tr('gotowe → folder „{0}” (dyski lokalne)', DONE_DIR), self.move_done)
+        # kopia oryginału przy podmianie: zmiana nazwy na .orig.mkv, program kasuje ją po podanej liczbie dni
+        self.backup = tk.BooleanVar(value=False)
+        self.backup_days = tk.IntVar(value=7)
+        row = ttk.Frame(g)
+        row.grid(row=3, column=0, columnspan=2, sticky="w", pady=1)
+        ttk.Checkbutton(row, text=tr('kopia oryginału .orig.mkv przez'), variable=self.backup).pack(side="left")
+        ttk.Spinbox(row, from_=1, to=90, width=4, textvariable=self.backup_days).pack(side="left", padx=(4, 4))
+        ttk.Label(row, text=tr('dni')).pack(side="left")
 
         g = group(tr('Gdy brak napisów'))
         self.whisper = tk.BooleanVar(value=True)
@@ -3444,6 +3513,7 @@ class QueueApp:
             return
         cancel.clear()
         self.run_started, self.stop_reason = time.time(), None
+        threading.Thread(target=prune_backups, daemon=True).start()   # stare kopie .orig.mkv
         print(time.strftime("\n===== Start %Y-%m-%d %H:%M ====="))
         if self.apply_parallel(then_start=True):   # najpierw restart Ollamy z nową równoległością
             self.stop_btn.configure(state="normal")
@@ -3492,7 +3562,12 @@ class QueueApp:
         self.update_status()
         mkv = Path(self.tree.set(item, "dir")) / self.tree.set(item, "file")
         lektor = {"Piper": "piper", "XTTS-v2": "xtts"}.get(self.lektor.get())
+        try:
+            backup_days = max(1, int(self.backup_days.get())) if self.backup.get() else 0
+        except (tk_error(), ValueError):
+            backup_days = 7 if self.backup.get() else 0
         args = argparse.Namespace(mux=self.mux.get(), force=self.force.get(), track=self.tracks.get(item),
+                                  backup_days=backup_days,
                                   replace=not self.keep.get(),
                                   whisper=self.whisper.get(), asr=self.asr.get().lower(), separate=self.separate.get(),
                                   lektor=lektor,

@@ -25,6 +25,6 @@ docker run -d --name mkv-translator --restart unless-stopped --init --user 99:10
     --log-opt max-size=10m --log-opt max-file=2 \
     -e OLLAMA_URL="$OLLAMA_URL" -e TZ=Europe/Warsaw \
     -v /mnt:/mnt -v "$DIR":/config \
-    mkv-translator --watch "$CO_ILE_MINUT" --parallel "$ROWNOLEGLE" --model "$MODEL" --source "${JEZYK:-auto}" --target "${CEL:-pl}" --ui-lang "${JEZYK_KOMUNIKATOW:-pl}" --mux ${NTFY:+--ntfy "$NTFY"} "${FOLDERY[@]}"
+    mkv-translator --watch "$CO_ILE_MINUT" --parallel "$ROWNOLEGLE" --model "$MODEL" --source "${JEZYK:-auto}" --target "${CEL:-pl}" --ui-lang "${JEZYK_KOMUNIKATOW:-pl}" --backup-days "${KOPIA_DNI:-0}" --mux ${NTFY:+--ntfy "$NTFY"} "${FOLDERY[@]}"
 
 echo "== gotowe. Podgląd pracy:  docker logs -f mkv-translator   (albo ikona kontenera > Logs w zakładce Docker)"

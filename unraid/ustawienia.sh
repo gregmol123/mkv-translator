@@ -26,3 +26,6 @@ MODEL="gemma4:31b"
 
 # język komunikatów w logu kontenera: pl albo en
 JEZYK_KOMUNIKATOW="pl"
+
+# kopia oryginału przy podmianie: <nazwa>.orig.mkv kasowana po tylu dniach (0 = bez kopii; zajmuje miejsce jak film)
+KOPIA_DNI=0

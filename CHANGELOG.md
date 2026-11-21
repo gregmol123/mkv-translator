@@ -11,6 +11,7 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 - **Słowniczek imion w poleceniu dla modelu:** ustalona pisownia imion serialu trafia do tłumaczenia od razu, nie tylko do poprawek po fakcie. (A9)
 - **Schemat odpowiedzi w Ollamie:** model musi zwrócić dokładnie tyle kwestii, ile dostał — mniej zgubionych kwestii i ponowień. (A10)
 - **Tempo czytania wg norm Netflix PL:** raport jakości pokazuje osobno kwestie szybkie (17–20 znaków/s) i za szybkie (powyżej 20). (A11)
+- **Kopia oryginału przy podmianie** (opcja w „Zapis wyniku”, `--backup-days`, `KOPIA_DNI` na Unraid): oryginał zostaje jako `<nazwa>.orig.mkv` i program kasuje go po podanej liczbie dni. Domyślnie wyłączona, bo zajmuje tyle miejsca co film. Kasowane są tylko kopie zapisane w `kopie_oryginalow.json`. (A4)
 
 ### Zmienione
 - **Język mowy z 8 próbek** rozłożonych po filmie (głosowanie z wagą pewności) zamiast jednej — piosenka albo lektor w jednym miejscu nie zmienia już wyniku; przy 5.1 próbki z kanału centralnego. (A8)
