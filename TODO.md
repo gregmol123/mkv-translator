@@ -1,6 +1,6 @@
 # Plan prac — MKV Translator
 
-Stan na 21.11.2026, 16:51. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
+Stan na 21.11.2026, 16:59. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
 
 ## Zrobione
 
@@ -13,6 +13,7 @@ Stan na 21.11.2026, 16:51. Źródło: raport `reports/Ulepszenia MKV Translatora
 - [x] C1: kontekst z 4 kwestiami po partii i 5 gotowymi parami tłumaczeń; próba na 90 kwestiach Shef 15 (gemma4:26b, 17 s) OK — 21.11
 - [x] C2: streszczenie odcinka raz na plik w poleceniu dla modelu; próba Shef 15: 547 kwestii, 9 s, trafne postaci i formy ty/Pan — 21.11
 - [x] Z2: 6 odcinków z rosyjskimi napisami (Chyornaya grafinya, Gorkij 53, Poluraspad po 2) w M:\!TEMP\B1 — 21.11
+- [x] B1: pomiar 6 odcinków × 2 fragmenty × 4 ustawienia (3479 słów wzorca, 7 min): błąd słów GigaAM 15,2%, GigaAM+Demucs 13,3%, Whisper 12,6%, Whisper+Demucs 15,1%; czasy kwestii GigaAM ~150 ms, Whisper ~290 ms; lepszy z pary GigaAM+Demucs/Whisper na fragment dałby 10,6% → B8 ma sens (reports/asr_bench 2026-11-21 1658.md) — 21.11
 
 ## Do decyzji (Ty)
 
@@ -40,7 +41,7 @@ _ok. 1 dzień mojej pracy, bez pomiarów_
 
 _ok. 4–6 dni mojej pracy; każdą zmianę mierzymy na B1_
 
-- [ ] **B1** Zestaw wzorcowy 5–10 klipów (muzyka, szept, akcja, piosenka, szybki dialog) i pomiar WER/CER, czasów i halucynacji — M, ok. 4 h — W TOKU: narzędzie gotowe 21.11 16:18; pomiar 6 odcinków × 2 fragmenty × 4 ustawienia trwa od 16:50, ok. 45–60 min
+- [x] **B1** Zestaw wzorcowy 5–10 klipów (muzyka, szept, akcja, piosenka, szybki dialog) i pomiar WER/CER, czasów i halucynacji — M, ok. 4 h — zrobione 21.11 16:58
 - [ ] **B2** GigaAM: przejście na wariant v3 RNNT (8,3% WER zamiast 9,1%), porównanie z GigaAM Multilingual 600M — S, ok. 1 h
 - [ ] **B3** Cięcie mowy w ciszy (500–700 ms, maks. 25–28 s) zamiast twardo co 20 s w środku słowa — M, ok. 4 h
 - [ ] **B4** Nowy podział na kwestie: koniec zdania lub pauza, 42 zn × 2 linie, min. 20 klatek, maks. 7 s, przerwa 2 klatki, ogon +0,4 s — M, ok. 4 h

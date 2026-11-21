@@ -7,6 +7,7 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 ### Dodane
 - Plan ulepszeń w `TODO.md` i raport badawczy o rozpoznawaniu mowy, standardach napisów i modelach tłumaczenia.
 - Dokumentacja: `docs/ARCHITEKTURA.md`, `CONTRIBUTING.md`.
+- **Pomiar rozpoznawania mowy** `tools/asr_bench.py`: rosyjskie napisy z filmu jako wzorzec, błąd słów/znaków, przesunięcie kwestii i kwestie-widma dla kilku ustawień; pierwszy pomiar w `reports/asr_bench 2026-11-21 1658.md`. (B1)
 - **Filtr halucynacji rozpoznawania mowy:** usuwa napisy-widma Whispera („Субтитры сделал…”, „Продолжение следует”, „Thanks for watching”), zapętlone zdania i kwestie o bardzo niskiej pewności. (A1)
 - **Słowniczek imion w poleceniu dla modelu:** ustalona pisownia imion serialu trafia do tłumaczenia od razu, nie tylko do poprawek po fakcie. (A9)
 - **Schemat odpowiedzi w Ollamie:** model musi zwrócić dokładnie tyle kwestii, ile dostał — mniej zgubionych kwestii i ponowień. (A10)
