@@ -1,6 +1,6 @@
 # Plan prac — MKV Translator
 
-Stan na 21.11.2026, 16:59. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
+Stan na 21.11.2026, 17:30. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
 
 ## Zrobione
 
@@ -14,6 +14,7 @@ Stan na 21.11.2026, 16:59. Źródło: raport `reports/Ulepszenia MKV Translatora
 - [x] C2: streszczenie odcinka raz na plik w poleceniu dla modelu; próba Shef 15: 547 kwestii, 9 s, trafne postaci i formy ty/Pan — 21.11
 - [x] Z2: 6 odcinków z rosyjskimi napisami (Chyornaya grafinya, Gorkij 53, Poluraspad po 2) w M:\!TEMP\B1 — 21.11
 - [x] B1: pomiar 6 odcinków × 2 fragmenty × 4 ustawienia (3479 słów wzorca, 7 min): błąd słów GigaAM 15,2%, GigaAM+Demucs 13,3%, Whisper 12,6%, Whisper+Demucs 15,1%; czasy kwestii GigaAM ~150 ms, Whisper ~290 ms; lepszy z pary GigaAM+Demucs/Whisper na fragment dałby 10,6% → B8 ma sens (reports/asr_bench 2026-11-21 1658.md) — 21.11
+- [x] B8 (pierwsza wersja): GigaAM + Whisper naraz, rozbieżne kwestie rozstrzyga model językowy; pomiar na 12 fragmentach: 13,0% wobec 13,0% GigaAM+Demucs — bez zysku, 2,6× wolniej; zostaje jako opcja eksperymentalna, domyślne ustawienie bez zmian — 21.11
 
 ## Do decyzji (Ty)
 

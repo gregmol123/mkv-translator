@@ -208,7 +208,8 @@ def whisper_model(name, device):
     return cached(("whisper", name, device), load)
 
 
-def whisper_cues(audio, args, device):
+def whisper_cues(audio, args, device, words_out=None):
+    """Kwestie Whispera (start, koniec, tekst, pewność); words_out: lista, do której trafiają wszystkie słowa."""
     model = whisper_model(args.model, device)
     # ustawienia nastawione na to, żeby nie gubić kwestii: czuły wykrywacz mowy (ciche dialogi, mowa
     # na tle muzyki), zachowywanie fragmentów o niskiej pewności i brak "ciągnięcia" poprzedniego tekstu,
@@ -227,6 +228,8 @@ def whisper_cues(audio, args, device):
             confidence = 0.0                  # niska pewność dekodera i słów naraz — prawie zawsze widmo
         parts = split_segment(seg.words) if seg.words else [(seg.start, seg.end, seg.text.strip())]
         cues += [(*p, confidence) for p in parts]
+        if words_out is not None and confidence > 0:
+            words_out += seg.words or []
         done = round(100 * seg.end / info.duration) if info.duration else 100
         print(tr('\r    rozpoznawanie mowy: {0}%', min(100, done)), end="", flush=True)
     print()
@@ -281,15 +284,84 @@ def merge_short(cues, gap=0.35, max_chars=60, max_seconds=5.0):
     return out
 
 
+def to_mono16(audio, rate):
+    """Miks do mono 16 kHz (dla Whispera, gdy GigaAM dostaje głos oddzielony Demucsem)."""
+    import torch
+    import torchaudio.functional as F
+    mono = torch.from_numpy(audio.mean(1).astype(np.float32))
+    return (F.resample(mono, rate, 16000) if rate != 16000 else mono).numpy()
+
+
+ENSEMBLE_SIMILAR = 0.85                        # podobieństwo tekstów GigaAM i Whispera, od którego uznajemy zgodę
+
+
+def norm_words(text):
+    return " ".join(re.findall(r"[\w']+", text.lower().replace("ё", "е")))
+
+
+def combine_asr(g_cues, w_words, w_cues):
+    """Łączy dwa rozpoznania (B8): czasy i tekst kwestii z GigaAM, Whisper jako druga opinia.
+
+    Zwraca (kwestie, warianty): warianty = {numer kwestii od 1: {"gigaam": ..., "whisper": ...}} tam, gdzie
+    teksty się różnią — rozstrzyga je potem model językowy. Tekst, który ma tylko Whisper (GigaAM słyszy tam
+    ciszę), jest odrzucany jako prawdopodobna halucynacja, chyba że Whisper jest go bardzo pewny."""
+    import difflib
+    # każde słowo Whispera trafia do jednej kwestii GigaAM: tej, w której leży jego środek, a gdy w żadnej —
+    # do najbliższej w promieniu 0,6 s (czasy słów obu modeli różnią się o kilkaset ms, a słowa nie mogą
+    # się dublować ani ginąć na granicach kwestii)
+    owner = {}
+    for k, w in enumerate(w_words):
+        mid = (w.start + w.end) / 2
+        dist = [(0 if s <= mid <= e else min(abs(mid - s), abs(mid - e)), n) for n, (s, e, _) in enumerate(g_cues)]
+        best = min(dist, default=(9, -1))
+        if best[0] <= 0.6:
+            owner.setdefault(best[1], []).append(k)
+    rows, used = [], set()
+    for n, (start, end, text) in enumerate(g_cues):
+        ws = owner.get(n, [])
+        used.update(ws)
+        w_text = "".join(w_words[k].word for k in ws).strip()
+        differ = w_text and difflib.SequenceMatcher(None, norm_words(text), norm_words(w_text)).ratio() < ENSEMBLE_SIMILAR
+        rows.append((start, end, text, {"gigaam": text, "whisper": w_text} if differ else None))
+    only_whisper = kept = 0
+    for start, end, text, confidence in w_cues:
+        mine = [k for k, w in enumerate(w_words) if start - 0.01 <= w.start and w.end <= end + 0.01]
+        if not mine or any(k in used for k in mine):
+            continue
+        only_whisper += 1
+        if confidence >= 0.8 and len(text.split()) >= 3:   # wyraźna mowa, którą GigaAM przeoczył (np. szept)
+            rows.append((start, end, text, None))
+            kept += 1
+    rows.sort(key=lambda r: r[0])
+    variants = {n: r[3] for n, r in enumerate(rows, 1) if r[3]}
+    print(tr('    dwa modele: {0} kwestii, rozbieżnych {1}, tylko Whisper: {2} (zostawione pewne: {3})',
+             len(rows), len(variants), only_whisper, kept), flush=True)
+    return [r[:3] for r in rows], variants
+
+
 def transcribe(args):
     device = use_torch_cuda_libs()
     audio, rate = load_wav(args.audio)
+    mix = None
     if args.separate:
+        if args.engine == "ensemble":         # Whisper radzi sobie lepiej na miksie niż na głosie z Demucsa (B1)
+            mix = to_mono16(audio, rate)
         audio = separate_vocals(audio, rate, device)
     elif rate != 16000 or audio.shape[1] != 1:
         sys.exit("Oczekiwano pliku WAV 16 kHz mono.")
     else:
         audio = audio[:, 0]
+    if args.engine == "ensemble" and args.language == "ru":
+        # B8: GigaAM (czasy, tekst) + Whisper (druga opinia); rozbieżności rozstrzyga model językowy w programie
+        g_cues, dropped = drop_hallucinations([c for c in gigaam_cues(audio, device) if c[2]])
+        w_words = []
+        w_cues = [c for c in whisper_cues(audio if mix is None else mix, args, device, w_words) if c[2]]
+        clean = {c[0] for c in drop_hallucinations(w_cues)[0]}
+        cues, variants = combine_asr(g_cues, w_words, [c for c in w_cues if c[0] in clean])
+        write_cues(cues, args.out)
+        Path(args.out + ".warianty.json").write_text(json.dumps(variants, ensure_ascii=False), encoding="utf-8")
+        print(tr('    rozpoznano {0} kwestii', len(cues)))
+        return
     cues = None
     if args.engine == "gigaam" and args.language == "ru":   # GigaAM zna tylko rosyjski
         # GigaAM potrafi sporadycznie paść przy wczytywaniu; ponawiamy, zamiast tracić gotowe oddzielenie głosu
@@ -311,12 +383,16 @@ def transcribe(args):
     cues, dropped = drop_hallucinations([c for c in cues if c[2]])
     if dropped:
         print(tr('    usunięto {0} kwestii-widm (napisy z YouTube, zapętlenia, bardzo niska pewność)', dropped))
-    tmp = Path(args.out + ".tmp")              # zapis atomowy: przerwany nie zostawia niepełnego pliku
+    write_cues(cues, args.out)
+    print(tr('    rozpoznano {0} kwestii', len(cues)))
+
+
+def write_cues(cues, out):
+    tmp = Path(out + ".tmp")                   # zapis atomowy: przerwany nie zostawia niepełnego pliku
     with open(tmp, "w", encoding="utf-8") as f:
         for i, (start, end, text) in enumerate(cues, 1):
             f.write(f"{i}\n{srt_time(start)} --> {srt_time(end)}\n{text}\n\n")
-    os.replace(tmp, args.out)
-    print(tr('    rozpoznano {0} kwestii', len(cues)))
+    os.replace(tmp, out)
 
 
 def detect(args):
@@ -764,7 +840,7 @@ def main():
     t = sub.add_parser("transcribe")
     t.add_argument("audio")
     t.add_argument("out")
-    t.add_argument("--engine", choices=["whisper", "gigaam"], default="whisper")
+    t.add_argument("--engine", choices=["whisper", "gigaam", "ensemble"], default="whisper")
     t.add_argument("--model", default=WHISPER_MODEL, help=tr('model Whisper'))
     t.add_argument("--language", default="ru", help=tr('język mowy (ru, en, uk...); GigaAM obsługuje tylko ru'))
     t.add_argument("--separate", action="store_true",

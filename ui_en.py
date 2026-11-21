@@ -390,4 +390,6 @@ EN = {
     'kopia oryginału .orig.mkv przez': 'keep original as .orig.mkv for',
     'dni': 'days',
     'streszczenie odcinka dla tłumacza: {0} znaków': 'episode summary for the translator: {0} characters',
+    'rozbieżności dwóch modeli: {0}; wybrano GigaAM {1}, Whisper {2}, połączono {3}': 'two-model disagreements: {0}; chose GigaAM {1}, Whisper {2}, merged {3}',
+    'dwa modele: {0} kwestii, rozbieżnych {1}, tylko Whisper: {2} (zostawione pewne: {3})': 'two models: {0} cues, {1} disagreeing, Whisper only: {2} (confident ones kept: {3})',
 }

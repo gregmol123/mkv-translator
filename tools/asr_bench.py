@@ -24,6 +24,8 @@ import translate_mkv as t                    # noqa: E402
 CONFIGS = {                                  # nazwa -> (silnik, oddzielanie głosu)
     "gigaam": ("gigaam", False), "gigaam+demucs": ("gigaam", True),
     "whisper": ("whisper", False), "whisper+demucs": ("whisper", True),
+    # B8: GigaAM na głosie z Demucsa + Whisper na miksie, rozbieżności rozstrzyga model językowy (--llm)
+    "gigaam+whisper": ("ensemble", True),
 }
 
 
@@ -97,12 +99,13 @@ def main():
     ap.add_argument("--clips", type=int, default=2, help="ile fragmentów z każdego filmu (rozłożone 20–80%%)")
     ap.add_argument("--length", type=int, default=240, help="długość fragmentu w sekundach")
     ap.add_argument("--configs", default="gigaam,gigaam+demucs,whisper", help=", ".join(CONFIGS))
+    ap.add_argument("--llm", default=t.OLLAMA_MODEL, help="model Ollamy rozstrzygający rozbieżności (gigaam+whisper)")
     ap.add_argument("--ref", help="plik SRT ze wzorcem zamiast napisów z filmu (tylko przy jednym filmie)")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / "reports"),
                     help="folder na raport (JSON i Markdown)")
     args = ap.parse_args()
     configs = [c.strip() for c in args.configs.split(",")]
-    results = []
+    results, llm = [], None
     with tempfile.TemporaryDirectory() as tmp:
         for film in map(Path, args.films):
             if args.ref:                      # wzorzec z osobnego pliku (np. ręcznie poprawiony zapis mowy)
@@ -122,8 +125,17 @@ def main():
                     wav, out = Path(tmp) / "clip.wav", Path(tmp) / "hyp.srt"
                     extract(film, audio, start, args.length, separate, wav)
                     t0 = time.time()
+                    if engine == "ensemble":
+                        t.ollama_unload()     # cała karta dla modeli mowy, jak w programie
                     t.run_helper(["transcribe", wav, out, "--engine", engine, "--language", "ru"]
                                  + (["--separate"] if separate else []))
+                    if engine == "ensemble":
+                        raw = [(seconds(c.start), seconds(c.end), c.text)
+                               for c in t.parse_srt(out.read_text(encoding="utf-8"))]
+                        print(f"    przed rozstrzyganiem: WER {score(ref, raw)['wer']:.1%}", flush=True)
+                        t.free_helper()
+                        llm = llm or t.OllamaEngine(args.llm)
+                        t.resolve_asr_variants(out, llm)
                     took = time.time() - t0
                     hyp = [(seconds(c.start), seconds(c.end), c.text) for c in t.parse_srt(out.read_text(encoding="utf-8"))]
                     row = {"film": film.name, "start": start, "config": name, "seconds": round(took, 1), **score(ref, hyp)}

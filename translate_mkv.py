@@ -1906,7 +1906,65 @@ def detect_speech_language(mkv, audio_index, tmp, center=False):
     return code
 
 
-def transcribe(mkv, audio, args, tmp):
+ASR_PICK_PROMPT = """Dwa systemy rozpoznawania mowy zapisały te same kwestie z filmu inaczej (wersje "A" i "B").
+Wersja A ma dokładne granice kwestii; w B słowa z początku albo końca bywają przesunięte do sąsiedniej kwestii,
+więc brak słów w B na brzegach nie jest błędem A. Dla każdej kwestii zwróć poprawny tekst w języku oryginału:
+zostaw A, chyba że B wyraźnie poprawia źle usłyszane słowo (wtedy popraw tylko to słowo w A). Nie usuwaj słów
+z A, nie dodawaj słów, których nie ma w żadnej wersji, nie streszczaj i nie tłumacz. Pole "kontekst" to sąsiednie
+kwestie tylko do wglądu. Zwróć wyłącznie obiekt JSON: te same klucze co w "kwestie", wartości to tekst."""
+ASR_PICK_BATCH = 40
+
+
+ASR_NAMES = {"gigaam": "GigaAM", "whisper": "Whisper", "gigaam+whisper": "GigaAM + Whisper"}
+ASR_ENGINES = {"gigaam+whisper": "ensemble"}   # nazwa w programie -> silnik audio_tools.py
+
+
+def resolve_asr_variants(srt_path, engine):
+    """B8: rozstrzyga kwestie, w których GigaAM i Whisper usłyszeli co innego (plik <srt>.warianty.json).
+    Model językowy wybiera wersję albo minimalnie je łączy; odpowiedź niepodobna do żadnej wersji jest odrzucana."""
+    import difflib
+    var_file = Path(str(srt_path) + ".warianty.json")
+    try:
+        variants = {int(k): v for k, v in json.loads(var_file.read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError):
+        return
+    model = engine if isinstance(engine, OllamaEngine) and not engine.line_mode else repair_engine(engine)
+    if variants and model is not None:
+        cues = parse_srt(Path(srt_path).read_text(encoding="utf-8", errors="replace"))
+        ids = sorted(k for k in variants if 1 <= k <= len(cues))
+        picked = {"A": 0, "B": 0, "łączone": 0}
+        for pos in range(0, len(ids), ASR_PICK_BATCH):
+            if cancel.is_set():
+                raise Cancelled
+            part = ids[pos:pos + ASR_PICK_BATCH]
+            near = sorted({j for k in part for j in (k - 2, k - 1, k + 1) if 1 <= j <= len(cues) and j not in variants})
+            payload = {"kontekst": {str(j): cues[j - 1].text for j in near},
+                       "kwestie": {str(k): {"A": variants[k]["gigaam"], "B": variants[k]["whisper"]} for k in part}}
+            schema = {"type": "object", "properties": {str(k): {"type": "string"} for k in part},
+                      "required": [str(k) for k in part]}
+            try:
+                raw = model._chat([{"role": "system", "content": ASR_PICK_PROMPT},
+                                   {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], fmt=schema)
+                answer = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+            except (ValueError, FatalError):
+                continue                          # ta partia zostaje z wersją GigaAM
+            for k in part:
+                text = str(answer.get(str(k), "")).strip()
+                a, b = variants[k]["gigaam"], variants[k]["whisper"]
+                sim = [difflib.SequenceMatcher(None, text.lower(), x.lower()).ratio() for x in (a, b)]
+                if not text or max(sim) < 0.5:
+                    continue                      # model wymyślił coś trzeciego — zostaje GigaAM
+                if len(text.split()) < 0.8 * len(a.split()):
+                    continue                      # wybór gubi słowa, które GigaAM usłyszał — zostaje GigaAM
+                cues[k - 1].text = text
+                picked["A" if sim[0] >= 0.99 else "B" if sim[1] >= 0.99 else "łączone"] += 1
+        write_srt(cues, srt_path)
+        print(tr('    rozbieżności dwóch modeli: {0}; wybrano GigaAM {1}, Whisper {2}, połączono {3}',
+                 len(ids), picked["A"], picked["B"], picked["łączone"]))
+    var_file.unlink(missing_ok=True)
+
+
+def transcribe(mkv, audio, args, tmp, engine=None):
     """Rozpoznaje mowę ze ścieżki dźwiękowej; zwraca (kwestie, język). Wynik zostaje w <nazwa>.rozpoznane.ru.srt
     (nazwa historyczna — plik może zawierać też inny język).
 
@@ -1955,10 +2013,10 @@ def transcribe(mkv, audio, args, tmp):
         if lang == OUT["code"]:
             raise FatalError(tr('mowa jest już w języku docelowym'))
         asr = args.asr if lang == "ru" else "whisper"
-        print(tr('    mowa: {0}, rozpoznawanie: {1}', LANGS[lang][0], 'GigaAM' if asr == 'gigaam' else 'Whisper'))
+        print(tr('    mowa: {0}, rozpoznawanie: {1}', LANGS[lang][0], ASR_NAMES.get(asr, asr)))
         cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(mkv), "-map", f"0:a:{src}"]
-        res, helper = None, ["transcribe", wav, ru_srt, "--engine", asr, "--language", lang]
-        if asr == "whisper" and getattr(args, "whisper_model", None):
+        res, helper = None, ["transcribe", wav, ru_srt, "--engine", ASR_ENGINES.get(asr, asr), "--language", lang]
+        if asr != "gigaam" and getattr(args, "whisper_model", None):
             helper += ["--model", args.whisper_model]
         if surround:
             # w dźwięku 5.1/7.1 dialogi są w kanale centralnym — ale bywa w nim też muzyka i efekty,
@@ -1976,6 +2034,7 @@ def transcribe(mkv, audio, args, tmp):
             helper.append("--separate")
         run_helper(helper)
         free_helper()                         # pamięć karty wraca do Ollamy przed tłumaczeniem
+        resolve_asr_variants(ru_srt, engine)  # dwa modele: rozbieżne kwestie rozstrzyga model językowy
         meta = {"asr": asr, "lang": lang, "model": getattr(args, "whisper_model", None) if asr == "whisper" else "gigaam"}
         meta_file.write_text(json.dumps(meta), encoding="utf-8")
     cues = parse_srt(ru_srt.read_text(encoding="utf-8", errors="replace"))
@@ -2070,7 +2129,7 @@ def process(mkv, args, engine):
                     if not args.whisper or args.track is not None:
                         raise
                     print(tr('    {0} — rozpoznaję mowę z dźwięku', e))
-                    found = transcribe(mkv, audio, args, tmp)
+                    found = transcribe(mkv, audio, args, tmp, engine)
                 cues, lang = found
             else:
                 # napisy szczątkowe (np. sama ścieżka "Forced" albo urwane): poniżej 1,5 kwestii na minutę
@@ -2079,7 +2138,7 @@ def process(mkv, args, engine):
                 if args.whisper and args.track is None and audio and len(cues) < 1.5 * minutes:
                     print(tr('    napisy mają tylko {0} kwestii na {1:.0f} min filmu — rozpoznaję mowę z dźwięku', len(cues), minutes))
                     try:
-                        spoken, spoken_lang = transcribe(mkv, audio, args, tmp)
+                        spoken, spoken_lang = transcribe(mkv, audio, args, tmp, engine)
                         if len(spoken) > len(cues):
                             cues, lang = spoken, spoken_lang
                     except FatalError as e:
@@ -2539,7 +2598,7 @@ def main():
                     help=tr('z --mux/--lektor: nie zmieniaj oryginału, zapisz kopię <nazwa>.pl.mkv'))
     ap.add_argument("--whisper", action="store_true",
                     help=tr('gdy plik nie ma rosyjskich napisów, rozpoznaj mowę z dźwięku'))
-    ap.add_argument("--asr", choices=["gigaam", "whisper"], default="gigaam",
+    ap.add_argument("--asr", choices=["gigaam", "whisper", "gigaam+whisper"], default="gigaam",
                     help=tr('silnik rozpoznawania mowy dla --whisper (domyślnie gigaam — model tylko dla rosyjskiego)'))
     ap.add_argument("--separate", action="store_true",
                     help=tr('z --whisper: przed rozpoznawaniem oddziel głos od muzyki i efektów (Demucs)'))
@@ -2886,7 +2945,7 @@ class QueueApp:
         self.separate = tk.BooleanVar(value=True)
         check(g, 0, tr('rozpoznaj mowę z dźwięku'), self.whisper)
         ttk.Label(g, text=tr('Silnik:')).grid(row=1, column=0, sticky="w")
-        ttk.Combobox(g, textvariable=self.asr, values=["GigaAM", "Whisper"], width=12,
+        ttk.Combobox(g, textvariable=self.asr, values=["GigaAM", "Whisper", "GigaAM+Whisper"], width=16,
                      state="readonly").grid(row=1, column=1, sticky="w", pady=2)
         # GigaAM zna tylko rosyjski — inne języki mowy zawsze rozpoznaje Whisper w wybranym rozmiarze
         ttk.Label(g, text=tr('Model Whisper:')).grid(row=2, column=0, sticky="w")
@@ -3625,7 +3684,8 @@ class QueueApp:
         args = argparse.Namespace(mux=self.mux.get(), force=self.force.get(), track=self.tracks.get(item),
                                   backup_days=backup_days,
                                   replace=not self.keep.get(),
-                                  whisper=self.whisper.get(), asr=self.asr.get().lower(), separate=self.separate.get(),
+                                  whisper=self.whisper.get(), asr=self.asr.get().lower().replace(" ", ""),
+                                  separate=self.separate.get(),
                                   lektor=lektor,
                                   voice=self.voice.get().strip() or None, replace_audio=self.replace_audio.get(),
                                   source=SOURCE_CHOICES.get(untr(self.source.get(), SOURCE_CHOICES), "auto"),
