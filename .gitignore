@@ -16,3 +16,10 @@
 # kopie programu dla serwera powstają przy wgrywaniu (README)
 unraid/translate_mkv.py
 unraid/ui_en.py
+!CHANGELOG.md
+!CONTRIBUTING.md
+!TODO.md
+!docs/
+!docs/*.md
+!reports/
+!reports/*.md
