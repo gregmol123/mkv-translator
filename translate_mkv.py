@@ -114,7 +114,10 @@ Zasady:
 - każda kwestia to osobna wartość: nie łącz, nie dziel i nie pomijaj kwestii,
 - pola pomocnicze (jeśli występują) są tylko do wglądu — nie tłumacz ich i nie zwracaj: "kontekst" to kwestie \
 tuż przed tą partią, "dalej" to kwestie tuż po niej (zdanie bywa rozcięte między kwestie), a "przetlumaczone" to \
-wcześniejsze pary oryginał -> tłumaczenie — trzymaj się ich formy zwracania się (ty/Pan), rodzaju mówiących i pisowni.
+wcześniejsze pary oryginał -> tłumaczenie — trzymaj się ich formy zwracania się (ty/Pan), rodzaju mówiących i pisowni,
+- pole "plec" (jeśli występuje) podaje płeć osoby mówiącej daną kwestię: K = kobieta, M = mężczyzna — użyj jej w formach
+o sobie samym (zrobiłam/zrobiłem, byłam/byłem, sama/sam); to oszacowanie z głosu, więc wyraźne formy w oryginale mają
+pierwszeństwo.
 Odpowiedz samym JSON-em, bez komentarzy i bez bloków kodu."""
 
 SHORTEN_PROMPT = """Jesteś redaktorem polskich napisów filmowych. Dostajesz obiekt JSON: klucze to numery, \
@@ -135,7 +138,9 @@ Rules:
 - every cue is a separate value: do not merge, split or skip cues,
 - helper fields (if present) are for reference only — do not translate or return them: "kontekst" holds the cues \
 just before this batch, "dalej" the cues just after it (a sentence may be split across cues), and "przetlumaczone" \
-earlier source -> translation pairs — keep their forms of address, speakers' genders and spellings consistent.
+earlier source -> translation pairs — keep their forms of address, speakers' genders and spellings consistent,
+- the "plec" field (if present) gives the speaker's gender for a cue: K = female, M = male (estimated from the voice;
+explicit forms in the source take precedence).
 Reply with JSON only, no comments and no code blocks."""
 
 SHORTEN_PROMPT_EN = """You edit English film subtitles. You receive a JSON object: keys are numbers, values are \
@@ -1326,13 +1331,20 @@ CONTEXT_NEXT, CONTEXT_PAIRS = 4, 5          # kwestie po partii i gotowe pary t�
 SUMMARY_MIN_CUES = 60                         # krótsze pliki tłumaczą się bez streszczenia
 
 
-def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, quality=None):
+def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, quality=None, speakers=None):
     """Tłumaczy kwestie; postęp zapisuje po każdej partii w pliku checkpoint, żeby dało się wznowić.
 
     glossary: plik słowniczka imion serialu; quality: słownik, do którego trafia ocena jakości tłumaczenia.
     """
     parts = [split_cue(c) for c in cues]
     flat = [seg for _, _, segs in parts for seg in segs]
+    # B12: płeć mówiącego dla każdego segmentu (kwestia z myślnikami = dwie osoby, po jednej na wypowiedź)
+    gender = []
+    for k, (_, _, segs) in enumerate(parts):
+        group = speakers[k] if speakers and len(speakers) == len(cues) else []
+        for j in range(len(segs)):
+            who = group[j] if len(group) == len(segs) else group[0] if len(group) == 1 else {}
+            gender.append(who.get("p"))
     # kwestie bez liter (np. "...", "♪") zostają bez zmian
     todo = [i for i, t in enumerate(flat) if any(c.isalpha() for c in t)]
     done = list(flat)
@@ -1362,7 +1374,8 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
         earlier = [i for i in todo[:pos] if i in saved][-CONTEXT_PAIRS:]
         context = {"kontekst": [flat[i] for i in todo[max(0, pos - 8):pos]],
                    "przetlumaczone": [[flat[i], saved[i]] for i in earlier],
-                   "dalej": [flat[i] for i in todo[pos + step:pos + step + CONTEXT_NEXT]]}
+                   "dalej": [flat[i] for i in todo[pos + step:pos + step + CONTEXT_NEXT]],
+                   "plec": {str(n): gender[i] for n, i in enumerate(idx, 1) if gender[i]}}
         out = engine.translate([flat[i] for i in idx], context)
         for n, i in enumerate(idx):           # kwestia wróciła nieprzetłumaczona — przetłumacz ją osobno
             if n < len(out) and still_source(out[n], lang):
@@ -1959,6 +1972,53 @@ def punctuate_asr(srt_path, engine):
     print(tr('    interpunkcja dodana w {0} z {1} kwestii', fixed, len(cues)))
 
 
+WINDOW_PROMPT = """Dwa systemy rozpoznawania mowy zapisały te same fragmenty filmu (każdy ok. minuty) — wersje "A" i "B".
+Dla każdego fragmentu oceń, który zapis jest wierniejszy mowie: spójne, sensowne zdania, poprawne słowa i imiona,
+brak bełkotu, urwanych wyrazów i powtórzeń. Różnice w interpunkcji nie mają znaczenia. Odpowiedz wyłącznie obiektem
+JSON: klucze jak w "fragmenty", wartości "A" albo "B"."""
+WINDOW_SECONDS = 60
+
+
+def resolve_windows(srt_path, engine):
+    """B8 (wersja 2): dla każdej minuty filmu wybiera cały zapis GigaAM (A) albo Whispera (B, plik <srt>.whisper.srt).
+    Pomiar B1 pokazał, że modele wygrywają całymi fragmentami (piosenka, hałas, szybki dialog), nie pojedynczymi kwestiami."""
+    other = Path(str(srt_path) + ".whisper.srt")
+    if not other.exists():
+        return
+    model = engine if isinstance(engine, OllamaEngine) and not engine.line_mode else repair_engine(engine)
+    a = parse_srt(Path(srt_path).read_text(encoding="utf-8", errors="replace"))
+    b = parse_srt(other.read_text(encoding="utf-8", errors="replace"))
+    if model is None or not a or not b:
+        other.unlink(missing_ok=True)
+        return
+    sec = lambda c: sum(float(x) * m for x, m in zip(c.start.replace(",", ".").split(":"), (3600, 60, 1)))
+    window = lambda c: int(sec(c) // WINDOW_SECONDS)
+    keys = sorted({window(c) for c in a} | {window(c) for c in b})
+    texts = {k: (" ".join(c.text for c in a if window(c) == k), " ".join(c.text for c in b if window(c) == k)) for k in keys}
+    disputed = [k for k in keys if texts[k][0] != texts[k][1] and texts[k][0] and texts[k][1]]
+    pick = {k: "A" if texts[k][0] else "B" for k in keys}
+    for pos in range(0, len(disputed), 10):
+        if cancel.is_set():
+            raise Cancelled
+        part = disputed[pos:pos + 10]
+        payload = {"fragmenty": {str(k): {"A": texts[k][0], "B": texts[k][1]} for k in part}}
+        schema = {"type": "object", "properties": {str(k): {"type": "string", "enum": ["A", "B"]} for k in part},
+                  "required": [str(k) for k in part]}
+        try:
+            raw = model._chat([{"role": "system", "content": WINDOW_PROMPT},
+                               {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}], fmt=schema)
+            answer = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+            pick.update({k: answer.get(str(k), "A") for k in part})
+        except (ValueError, FatalError):
+            continue                          # ta partia zostaje z zapisem GigaAM
+    merged = [c for c in a if pick.get(window(c)) == "A"] + [c for c in b if pick.get(window(c)) == "B"]
+    merged.sort(key=sec)
+    write_srt(merged, srt_path)
+    other.unlink(missing_ok=True)
+    chosen_b = sum(pick[k] == "B" for k in disputed)
+    print(tr('    dwa modele: {0} minut porównanych, Whisper wybrany w {1}', len(disputed), chosen_b))
+
+
 def resolve_asr_variants(srt_path, engine):
     """B8: rozstrzyga kwestie, w których GigaAM i Whisper usłyszeli co innego (plik <srt>.warianty.json).
     Model językowy wybiera wersję albo minimalnie je łączy; odpowiedź niepodobna do żadnej wersji jest odrzucana."""
@@ -2026,6 +2086,7 @@ def transcribe(mkv, audio, args, tmp, engine=None):
         except (OSError, ValueError):
             meta = None                       # plik ze starszej wersji programu — używany jak dotąd
         if meta and (meta.get("asr") != args.asr and meta.get("lang") == "ru"
+                     or getattr(args, "diarize", False) and not meta.get("diarize")
                      or source != "auto" and meta.get("lang") != source):
             print(tr('    {0} powstał innym silnikiem albo w innym języku — rozpoznaję mowę od nowa', ru_srt.name))
             reuse = False
@@ -2061,9 +2122,11 @@ def transcribe(mkv, audio, args, tmp, engine=None):
         print(tr('    mowa: {0}, rozpoznawanie: {1}', LANGS[lang][0], ASR_NAMES.get(asr, asr)))
         cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(mkv), "-map", f"0:a:{src}"]
         res, helper = None, ["transcribe", wav, ru_srt, "--engine", ASR_ENGINES.get(asr, asr), "--language", lang]
+        if getattr(args, "diarize", False):   # B12: mówcy, myślniki dialogowe, płeć mówiącego
+            helper.append("--diarize")
         if asr == "gigaam-rnnt":              # B9: dokładniejsze słowa, interpunkcję wstawia model językowy
             helper += ["--gigaam-model", "gigaam-v3-rnnt"]
-        if asr == "whisper":                  # B11/B10: partie (9x szybciej, 12,1% zamiast 12,6%) + dokładne czasy
+        if asr in ("whisper", "gigaam+whisper"):   # B11/B10: partie (9x szybciej, 12,1% zamiast 12,6%) + dokładne czasy
             helper += ["--whisper-batch", "16"] + (["--align"] if lang in ("ru", "en") else [])
         if asr not in ("gigaam", "gigaam-rnnt") and getattr(args, "whisper_model", None):
             helper += ["--model", args.whisper_model]
@@ -2083,10 +2146,10 @@ def transcribe(mkv, audio, args, tmp, engine=None):
             helper.append("--separate")
         run_helper(helper)
         free_helper()                         # pamięć karty wraca do Ollamy przed tłumaczeniem
-        resolve_asr_variants(ru_srt, engine)  # dwa modele: rozbieżne kwestie rozstrzyga model językowy
+        resolve_windows(ru_srt, engine)       # dwa modele: lepszy zapis dla każdej minuty wybiera model językowy
         if asr == "gigaam-rnnt":
             punctuate_asr(ru_srt, engine)
-        meta = {"asr": asr, "lang": lang, "model": getattr(args, "whisper_model", None) if asr == "whisper" else "gigaam"}
+        meta = {"asr": asr, "lang": lang, "diarize": bool(getattr(args, "diarize", False)), "model": getattr(args, "whisper_model", None) if asr == "whisper" else "gigaam"}
         meta_file.write_text(json.dumps(meta), encoding="utf-8")
     cues = parse_srt(ru_srt.read_text(encoding="utf-8", errors="replace"))
     if not cues:
@@ -2099,6 +2162,12 @@ def transcribe(mkv, audio, args, tmp, engine=None):
         conf = json.loads(Path(str(ru_srt) + ".pewnosc.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         conf = []
+    try:
+        speakers = json.loads(Path(str(ru_srt) + ".mowcy.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        speakers = None
+    if speakers and len(speakers) == len(cues):
+        ASR_INFO["speakers"] = speakers
     if len(conf) == len(cues):
         low = [c.text for c, p in zip(cues, conf) if p is not None and p < ASR_UNSURE]
         ASR_INFO.update(unsure=len(low), total=len(cues), examples=low[:2])
@@ -2207,7 +2276,7 @@ def process(mkv, args, engine):
                         print(tr('    rozpoznawanie mowy nie powiodło się ({0}) — zostają napisy z pliku', e))
             engine.lang = lang
             write_srt(translate_cues(cues, engine, part, args.resume or not args.force,
-                                     glossary_file(mkv), quality), srt_out)
+                                     glossary_file(mkv), quality, ASR_INFO.get("speakers")), srt_out)
             if ASR_INFO.get("unsure"):        # B7: niepewne rozpoznanie mowy w ocenie pliku
                 quality["summary"] += tr(', niepewne rozpoznanie mowy: {0} kwestii', ASR_INFO["unsure"])
                 if ASR_INFO["unsure"] > ASR_UNSURE_SHARE * ASR_INFO["total"]:
@@ -2251,7 +2320,8 @@ def process(mkv, args, engine):
                 # napisy są już w pliku — usuwamy tylko pliki pośrednie utworzone przez program
                 for leftover in ([srt_out] if own_srt else []) + [mkv.with_suffix(".rozpoznane.ru.srt"),
                                                                     mkv.with_suffix(".rozpoznane.ru.json"),
-                                                                    mkv.with_suffix(".rozpoznane.ru.srt.pewnosc.json")]:
+                                                                    mkv.with_suffix(".rozpoznane.ru.srt.pewnosc.json"),
+                                                                    mkv.with_suffix(".rozpoznane.ru.srt.mowcy.json")]:
                     leftover.unlink(missing_ok=True)
                 print(tr('    zapisano w oryginalnym pliku: {0}', mkv.name))
             else:
@@ -2667,6 +2737,8 @@ def main():
                     help=tr('gdy plik nie ma rosyjskich napisów, rozpoznaj mowę z dźwięku'))
     ap.add_argument("--asr", choices=["gigaam", "gigaam-rnnt", "whisper", "gigaam+whisper"], default="gigaam",
                     help=tr('silnik rozpoznawania mowy dla --whisper (domyślnie gigaam — model tylko dla rosyjskiego)'))
+    ap.add_argument("--diarize", action="store_true",
+                    help=tr('z --whisper: rozpoznawanie mówców (pyannote) — myślniki dialogowe i płeć mówiącego; wymaga HF_TOKEN'))
     ap.add_argument("--separate", action="store_true",
                     help=tr('z --whisper: przed rozpoznawaniem oddziel głos od muzyki i efektów (Demucs)'))
     ap.add_argument("--lektor", choices=["piper", "xtts"],
@@ -2819,7 +2891,7 @@ class QueueApp:
     # opcje okna zapisywane razem z kolejką
     SAVED_OPTIONS = ("recursive", "model", "mux", "keep", "force", "whisper", "asr", "separate",
                      "lektor", "voice", "replace_audio", "parallel", "move_done", "notify_toast", "ntfy_topic",
-                     "source", "target", "repair_model", "whisper_model", "backup", "backup_days")
+                     "source", "target", "repair_model", "whisper_model", "backup", "backup_days", "diarize")
     # listy wyboru, w których okno pokazuje tekst w swoim języku, a kolejka zapisuje klucz (tekst polski)
     AUTO = "automatycznie"
     CHOICE_OPTIONS = {"source": SOURCE_CHOICES, "target": TARGET_CHOICES, "lektor": ("brak",), "repair_model": (AUTO,)}
@@ -3020,6 +3092,8 @@ class QueueApp:
         ttk.Combobox(g, textvariable=self.whisper_model, values=WHISPER_MODELS, width=14,
                      state="readonly").grid(row=2, column=1, sticky="w", pady=2)
         check(g, 3, tr('oddziel głos od muzyki (Demucs)'), self.separate)
+        self.diarize = tk.BooleanVar(value=False)
+        check(g, 4, tr('rozpoznawaj mówców (myślniki, płeć; pyannote)'), self.diarize)
 
         g = group(tr('Lektor'))
         self.lektor = tk.StringVar(value=tr("brak"))
@@ -3752,7 +3826,7 @@ class QueueApp:
                                   backup_days=backup_days,
                                   replace=not self.keep.get(),
                                   whisper=self.whisper.get(), asr=self.asr.get().lower().replace(" ", ""),
-                                  separate=self.separate.get(),
+                                  separate=self.separate.get(), diarize=self.diarize.get(),
                                   lektor=lektor,
                                   voice=self.voice.get().strip() or None, replace_audio=self.replace_audio.get(),
                                   source=SOURCE_CHOICES.get(untr(self.source.get(), SOURCE_CHOICES), "auto"),

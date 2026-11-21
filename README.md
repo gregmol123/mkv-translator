@@ -41,6 +41,10 @@ python translate_mkv.py --check
 
 Pełna lista opcji: `python translate_mkv.py --help`.
 
+## Rozpoznawanie mówców (opcjonalne)
+
+Opcja „rozpoznawaj mówców” (`--diarize`) używa modelu `pyannote/speaker-diarization-community-1`, który na Hugging Face wymaga zaakceptowania warunków. Załóż konto, zaakceptuj warunki na stronie modelu, utwórz token z prawem odczytu i zapisz go jako zmienną środowiskową użytkownika `HF_TOKEN`. Bez tokenu program pomija ten krok.
+
 ## Unraid
 
 Folder `unraid/`: skopiuj go na serwer razem z `translate_mkv.py` i `ui_en.py`, ustaw adres Ollamy i foldery w `ustawienia.sh`, potem w terminalu Unraid:

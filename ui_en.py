@@ -408,4 +408,13 @@ EN = {
     'wyrównanie czasów słów: {0}/{1}': 'word timing alignment: {0}/{1}',
     'dokładne czasy kwestii z wyrównania (Qwen3-ForcedAligner; rosyjski i angielski)': 'precise cue timing from forced alignment (Qwen3-ForcedAligner; Russian and English)',
     'Whisper w partiach po N fragmentów (np. 16; 0 = po kolei)': 'Whisper in batches of N chunks (e.g. 16; 0 = sequential)',
+    'rozpoznano {0} kwestii (GigaAM) i {1} (Whisper)': 'recognised {0} cues (GigaAM) and {1} (Whisper)',
+    'dwa modele: {0} minut porównanych, Whisper wybrany w {1}': 'two models: {0} minutes compared, Whisper chosen in {1}',
+    'rozpoznawanie mówców pominięte: brak tokenu HF_TOKEN (zob. README)': 'speaker recognition skipped: no HF_TOKEN token (see README)',
+    'rozpoznawanie mówców ({0}) — wczytuję model...': 'speaker recognition ({0}) — loading model...',
+    'rozpoznawanie mówców...': 'recognising speakers...',
+    'mówców: {0} ({1}), kwestii dialogowych z myślnikami: {2}': 'speakers: {0} ({1}), dialogue cues with dashes: {2}',
+    'rozpoznawanie mówców (pyannote): myślniki dialogowe i płeć mówiącego; wymaga HF_TOKEN': 'speaker recognition (pyannote): dialogue dashes and speaker gender; needs HF_TOKEN',
+    'z --whisper: rozpoznawanie mówców (pyannote) — myślniki dialogowe i płeć mówiącego; wymaga HF_TOKEN': 'with --whisper: speaker recognition (pyannote) — dialogue dashes and speaker gender; needs HF_TOKEN',
+    'rozpoznawaj mówców (myślniki, płeć; pyannote)': 'recognise speakers (dashes, gender; pyannote)',
 }

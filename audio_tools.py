@@ -419,6 +419,85 @@ def align_cues(audio, cues, language, device):
     return out
 
 
+DIAR_MODEL = "pyannote/speaker-diarization-community-1"
+FEMALE_F0 = 165.0                             # Hz: mediana wysokości głosu, od której mówca uznawany jest za kobietę
+DIALOG_MAX_CHARS = 2 * 42                     # dwie wypowiedzi z myślnikami mieszczą się w dwóch liniach
+
+
+def diarize(audio, device):
+    """B12: kto mówi kiedy (pyannote community-1, tryb "jeden mówca naraz"): lista (start, koniec, mówca).
+    Model jest zablokowany warunkami licencji — wymaga tokenu HF_TOKEN zaakceptowanego przez użytkownika."""
+    import torch
+    from pyannote.audio import Pipeline
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        print(tr('    rozpoznawanie mówców pominięte: brak tokenu HF_TOKEN (zob. README)'), flush=True)
+        return []
+
+    def load():
+        print(tr('    rozpoznawanie mówców ({0}) — wczytuję model...', DIAR_MODEL), flush=True)
+        pipe = Pipeline.from_pretrained(DIAR_MODEL, token=token)
+        return pipe.to(torch.device(device))
+
+    pipe = cached(("diar", device), load)
+    print(tr('    rozpoznawanie mówców...'), flush=True)
+    out = pipe({"waveform": torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))[None], "sample_rate": 16000})
+    ann = getattr(out, "exclusive_speaker_diarization", None) or getattr(out, "speaker_diarization", out)
+    return [(seg.start, seg.end, spk) for seg, _, spk in ann.itertracks(yield_label=True)]
+
+
+def speaker_genders(audio, turns):
+    """Płeć mówców z wysokości głosu (mediana F0 z ich wypowiedzi): {mówca: "K"/"M"}; przybliżenie, nie pewnik."""
+    import torch
+    import torchaudio.functional as F
+    pitches = {}
+    for start, end, spk in turns:
+        if end - start < 1.0:
+            continue
+        chunk = torch.from_numpy(np.ascontiguousarray(audio[int(start * 16000):int(end * 16000)], dtype=np.float32))
+        f0 = F.detect_pitch_frequency(chunk, 16000, freq_low=70, freq_high=400)
+        f0 = f0[(f0 > 70) & (f0 < 400)]
+        if len(f0):
+            pitches.setdefault(spk, []).append(float(f0.median()))
+    return {spk: "K" if np.median(v) >= FEMALE_F0 else "M" for spk, v in pitches.items()}
+
+
+def assign_speakers(cues, turns):
+    """Mówca każdej kwestii: ten, który mówi najdłużej w jej czasie (None, gdy nikt)."""
+    out = []
+    for cue in cues:
+        start, end = cue[0], cue[1]
+        talk = {}
+        for ts, te, spk in turns:
+            overlap = min(end, te) - max(start, ts)
+            if overlap > 0:
+                talk[spk] = talk.get(spk, 0.0) + overlap
+        out.append(max(talk, key=talk.get) if talk else None)
+    return out
+
+
+def dialog_merge(cues, speakers, gap=0.6):
+    """Dwie krótkie, sąsiednie wypowiedzi różnych mówców -> jedna kwestia z myślnikami dialogowymi (norma napisów)."""
+    out, spk_out = [], []
+    k = 0
+    while k < len(cues):
+        a = cues[k]
+        if k + 1 < len(cues):
+            b = cues[k + 1]
+            if speakers[k] and speakers[k + 1] and speakers[k] != speakers[k + 1] and b[0] - a[1] <= gap \
+                    and len(a[2]) <= 42 and len(b[2]) <= 42 and b[1] - a[0] <= MAX_CUE_SECONDS \
+                    and "\n" not in a[2] + b[2]:
+                conf = [c[3] for c in (a, b) if len(c) > 3 and c[3] is not None]
+                out.append((a[0], b[1], f"- {a[2]}\n- {b[2]}", min(conf) if conf else None))
+                spk_out.append([speakers[k], speakers[k + 1]])
+                k += 2
+                continue
+        out.append(a)
+        spk_out.append([speakers[k]] if speakers[k] else [])
+        k += 1
+    return out, spk_out
+
+
 def finish_cues(cues):
     """Wspólne wykończenie kwestii obu silników: sklejenie okruchów, ogon po ostatnim słowie, najkrótszy czas
     wyświetlania i przerwa 2 klatki przed następną kwestią (normy Netflix PL)."""
@@ -507,18 +586,16 @@ def transcribe(args):
     else:
         audio = audio[:, 0]
     if args.engine == "ensemble" and args.language == "ru":
-        # B8: GigaAM (czasy, tekst) + Whisper (druga opinia); rozbieżności rozstrzyga model językowy w programie
-        g_cues, dropped = drop_hallucinations([c for c in gigaam_cues(audio, device, args.gigaam_model, args.vad_silence_ms, args.vad_max_s, args.vad) if c[2]])
-        w_words = []
-        w_cues = [c for c in whisper_cues(audio if mix is None else mix, args, device, w_words) if c[2]]
-        clean = {c[0] for c in drop_hallucinations(w_cues)[0]}
-        cues, variants = combine_asr(g_cues, w_words, [c for c in w_cues if c[0] in clean])
-        # bez sklejania: numery kwestii muszą się zgadzać z wariantami do rozstrzygnięcia
-        cues = [(st, max(min(en + CUE_TAIL, cues[k + 1][0] - CUE_GAP) if k + 1 < len(cues) else en + CUE_TAIL, en), tx)
-                for k, (st, en, tx) in enumerate(cues)]
-        write_cues(cues, args.out)
-        Path(args.out + ".warianty.json").write_text(json.dumps(variants, ensure_ascii=False), encoding="utf-8")
-        print(tr('    rozpoznano {0} kwestii', len(cues)))
+        # B8 (wersja 2): dwa pełne zapisy — GigaAM (główny) i Whisper (<out>.whisper.srt, w partiach, z wyrównaniem
+        # czasów); program wybiera potem lepszy zapis dla całych okien filmu (resolve_windows w translate_mkv.py)
+        g_cues, _ = drop_hallucinations([c for c in gigaam_cues(audio, device, args.gigaam_model, args.vad_silence_ms,
+                                                                 args.vad_max_s, args.vad) if c[2]])
+        w_cues, _ = drop_hallucinations([c for c in whisper_cues(audio if mix is None else mix, args, device) if c[2]])
+        if args.align:
+            w_cues = align_cues(audio if mix is None else mix, w_cues, args.language, device)
+        write_cues(finish_cues(g_cues), args.out)
+        write_cues(finish_cues(w_cues), args.out + ".whisper.srt")
+        print(tr('    rozpoznano {0} kwestii (GigaAM) i {1} (Whisper)', len(g_cues), len(w_cues)))
         return
     cues = None
     if args.engine == "parakeet":             # B11: NVIDIA Parakeet TDT v3 (25 języków europejskich)
@@ -546,6 +623,19 @@ def transcribe(args):
     if args.align:
         cues = align_cues(audio if mix is None else mix, cues, args.language, device)
     cues = finish_cues(cues)
+    side = Path(args.out + ".mowcy.json")
+    side.unlink(missing_ok=True)
+    if args.diarize:                          # B12: mówcy, myślniki dialogowe i płeć mówiącego dla tłumacza
+        voice = audio if mix is None else mix
+        turns = diarize(voice, device)
+        if turns:
+            genders = speaker_genders(voice, turns)
+            cues, spk = dialog_merge(cues, assign_speakers(cues, turns))
+            side.write_text(json.dumps([[{"m": s, "p": genders.get(s)} for s in group] for group in spk]),
+                            encoding="utf-8")
+            n_dialog = sum(len(g) == 2 for g in spk)
+            print(tr('    mówców: {0} ({1}), kwestii dialogowych z myślnikami: {2}', len(genders),
+                     ", ".join(f"{k}={v}" for k, v in sorted(genders.items())), n_dialog), flush=True)
     write_cues(cues, args.out)
     print(tr('    rozpoznano {0} kwestii', len(cues)))
 
@@ -1019,6 +1109,8 @@ def main():
                    help=tr('wariant GigaAM z onnx-asr (np. gigaam-v3-rnnt, gigaam-multilingual-large-ctc)'))
     t.add_argument("--vad-silence-ms", type=int, default=VAD_SILENCE_MS,
                    help=tr('GigaAM: najkrótsza cisza dzieląca mowę (ms)'))
+    t.add_argument("--diarize", action="store_true",
+                   help=tr('rozpoznawanie mówców (pyannote): myślniki dialogowe i płeć mówiącego; wymaga HF_TOKEN'))
     t.add_argument("--align", action="store_true",
                    help=tr('dokładne czasy kwestii z wyrównania (Qwen3-ForcedAligner; rosyjski i angielski)'))
     t.add_argument("--sep", choices=["demucs", "roformer"], default="demucs",

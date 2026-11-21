@@ -25,7 +25,7 @@ CONFIGS = {                                  # nazwa -> (silnik, oddzielanie gł
     "gigaam": ("gigaam", False, []), "gigaam+demucs": ("gigaam", True, []),
     "whisper": ("whisper", False, []), "whisper+demucs": ("whisper", True, []),
     # B8: GigaAM na głosie z Demucsa + Whisper na miksie, rozbieżności rozstrzyga model językowy (--llm)
-    "gigaam+whisper": ("ensemble", True, []),
+    "gigaam+whisper": ("ensemble", True, ["--whisper-batch", "16", "--align"]),
     # B2: inne warianty GigaAM (bez interpunkcji / wielojęzyczny)
     "gigaam-rnnt+demucs": ("gigaam", True, ["--gigaam-model", "gigaam-v3-rnnt"]),
     "gigaam-ml+demucs": ("gigaam", True, ["--gigaam-model", "gigaam-multilingual-large-ctc"]),
@@ -172,7 +172,7 @@ def main():
                         print(f"    przed rozstrzyganiem: WER {score(ref, raw)['wer']:.1%}", flush=True)
                         t.free_helper()
                         llm = llm or t.OllamaEngine(args.llm)
-                        t.resolve_asr_variants(out, llm)
+                        t.resolve_windows(out, llm)
                     took = time.time() - t0
                     hyp = [(seconds(c.start), seconds(c.end), c.text) for c in t.parse_srt(out.read_text(encoding="utf-8"))]
                     row = {"film": short_name(film.name), "start": start, "config": name, "seconds": round(took, 1), **score(ref, hyp)}
