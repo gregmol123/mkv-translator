@@ -159,17 +159,35 @@ def gemma_prompt(text, lang):
                                         tname=TARGETS[OUT["code"]][0], tcode=OUT["code"])
 
 
-def system_prompt(lang, names=None):
-    """Polecenie dla modelu; names: ustalona pisownia imion serialu (słowniczek) jako {rdzeń z oryginału: zapis}."""
+def system_prompt(lang, names=None, summary=None):
+    """Polecenie dla modelu; names: ustalona pisownia imion serialu (słowniczek) jako {rdzeń z oryginału: zapis};
+    summary: streszczenie filmu/odcinka (kto jest kim, płeć, relacje) jako tło."""
     if OUT["code"] == "pl":
         text = SYSTEM_PROMPT.format(source=LANGS[lang][1])
         head = "Ustalona pisownia imion i nazw w tym serialu (rdzeń z oryginału -> zapis; odmieniaj po polsku):"
+        about = "Streszczenie całego odcinka — tło do rozumienia kwestii, nie tłumacz go:"
     else:
         text = SYSTEM_PROMPT_EN.format(source=LANGS[lang][0])
         head = "Established spelling of names in this series (source stem -> spelling):"
+        about = "Summary of the whole episode — background for understanding the cues, do not translate it:"
+    if summary:
+        text += "\n\n" + about + "\n" + summary
     if names:
         text += "\n\n" + head + "\n" + "\n".join(f"- {k} -> {v}" for k, v in names.items())
     return text
+
+
+SUMMARY_PROMPT = {
+    "pl": "Poniżej są napisy z całego odcinka filmu lub serialu (wybrane kwestie, po kolei). Napisz po polsku "
+          "zwięzłe streszczenie (6–10 zdań) jako tło dla tłumacza: o czym jest odcinek, kim są postaci (imiona, "
+          "płeć, zawód, relacje), kto jest z kim na \"ty\", a kto na \"Pan/Pani\", miejsce i czas akcji. Tylko "
+          "streszczenie, bez wstępu.",
+    "en": "Below are subtitles from a whole film or TV episode (selected cues, in order). Write a concise summary "
+          "in English (6–10 sentences) as background for a translator: what the episode is about, who the "
+          "characters are (names, gender, job, relationships), how they address each other, setting and time. "
+          "Summary only, no preamble.",
+}
+SUMMARY_CHARS = 12000                         # tyle znaków napisów trafia do streszczenia (mieści się w num_ctx)
 
 
 GLOSSARY_PROMPT_LIMIT = 80                   # tyle imion najwyżej trafia do polecenia (krótszy prompt = szybciej)
@@ -720,6 +738,7 @@ class OllamaEngine:
     parallel = 2             # ile partii tłumaczyć naraz (sens ma do wartości OLLAMA_NUM_PARALLEL)
     lang = "ru"              # język źródłowy bieżącego pliku (ustawia process())
     names = None             # pisownia imion serialu do polecenia (ustawia translate_cues())
+    summary = None           # streszczenie odcinka do polecenia (ustawia translate_cues())
 
     def __init__(self, model):
         self.model = model
@@ -798,6 +817,17 @@ class OllamaEngine:
                 out[i] = " ".join(self._lines(texts[i]))
         return out
 
+    def summarize(self, texts):
+        """Streszczenie odcinka z kwestii rozłożonych równo po całym filmie; None, gdy model zawiedzie."""
+        step = max(1, sum(len(t) + 1 for t in texts) // SUMMARY_CHARS + 1)
+        sample = "\n".join(texts[::step])[:SUMMARY_CHARS]
+        try:
+            text = self._chat([{"role": "system", "content": SUMMARY_PROMPT[OUT["code"]]},
+                               {"role": "user", "content": sample}]).strip()
+        except FatalError:
+            return None
+        return text[:2500] or None
+
     def shorten(self, items):
         """Skraca polskie napisy: items = [(tekst, największa liczba znaków)]; zwraca listę tekstów."""
         payload = {str(i): {"tekst": t, "max_znakow": m} for i, (t, m) in enumerate(items, 1)}
@@ -821,7 +851,7 @@ class OllamaEngine:
         if self.line_mode:
             return self._marked(texts) if len(texts) > 1 else [" ".join(self._lines(texts[0]))]
         if not self.line_mode:
-            messages = [{"role": "system", "content": system_prompt(self.lang, self.names)},
+            messages = [{"role": "system", "content": system_prompt(self.lang, self.names, self.summary)},
                         {"role": "user", "content": json_payload(texts, context)}]
             # schemat odpowiedzi: Ollama wymusza dokładnie klucze "1".."n" — mniej zgubionych kwestii i ponowień
             schema = {"type": "object", "properties": {str(i): {"type": "string"} for i in range(1, len(texts) + 1)},
@@ -905,7 +935,7 @@ class ClaudeEngine:
         response = self.client.messages.create(
             model=self.model,
             max_tokens=16000,
-            system=system_prompt(self.lang),
+            system=system_prompt(self.lang, getattr(self, "names", None), getattr(self, "summary", None)),
             output_config={"effort": "low"},
             messages=[{"role": "user", "content": json_payload(texts, context)}],
         )
@@ -1293,6 +1323,7 @@ def report_quality(video, verdict, summary, count):
 
 
 CONTEXT_NEXT, CONTEXT_PAIRS = 4, 5          # kwestie po partii i gotowe pary tłumaczeń w zapytaniu
+SUMMARY_MIN_CUES = 60                         # krótsze pliki tłumaczą się bez streszczenia
 
 
 def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, quality=None):
@@ -1315,6 +1346,13 @@ def translate_cues(cues, engine, checkpoint=None, resume=True, glossary=None, qu
     workers = max(1, getattr(engine, "parallel", 1))
     lang = getattr(engine, "lang", "ru")
     engine.names = glossary_prompt_names(glossary) if lang in ("ru", "uk") else None
+    engine.summary = None
+    # streszczenie odcinka (C2): raz na plik, jako tło w każdej partii; TranslateGemma ma stały format zapytania
+    if (hasattr(engine, "summarize") and not getattr(engine, "line_mode", False) and len(todo) >= SUMMARY_MIN_CUES
+            and os.environ.get("MKV_SUMMARY", "1") != "0"):
+        engine.summary = engine.summarize([flat[i] for i in todo])
+        if engine.summary:
+            print(tr('    streszczenie odcinka dla tłumacza: {0} znaków', len(engine.summary)))
 
     def translate_batch(pos):
         idx = todo[pos:pos + step]

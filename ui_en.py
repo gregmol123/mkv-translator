@@ -389,4 +389,5 @@ EN = {
     'przy podmianie oryginału zostaw go jako <nazwa>.orig.mkv przez DNI dni (0 = bez kopii)': 'when replacing the original, keep it as <name>.orig.mkv for DNI days (0 = no backup)',
     'kopia oryginału .orig.mkv przez': 'keep original as .orig.mkv for',
     'dni': 'days',
+    'streszczenie odcinka dla tłumacza: {0} znaków': 'episode summary for the translator: {0} characters',
 }
