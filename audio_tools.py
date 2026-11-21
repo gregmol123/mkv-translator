@@ -44,8 +44,13 @@ PIPER_VOICE = "pl_PL-darkman-medium"
 XTTS_VOICE = "Damien Black"
 MAX_SPEEDUP = 1.4        # o ile najwyżej przyspieszyć kwestię, która nie mieści się w czasie
 LAG_SPEEDUP = 1.8        # ...a o ile, gdy lektor jest już spóźniony względem napisów
+# podział na kwestie wg norm Netflix PL (B4)
 MAX_CUE_CHARS = 84      # dwie linie po 42 znaki
-MAX_CUE_SECONDS = 6.0
+MAX_CUE_SECONDS = 7.0
+MIN_CUE_SECONDS = 0.83  # 20 klatek przy 24 kl./s
+CUE_GAP = 0.083         # przerwa 2 klatki między kwestiami
+CUE_TAIL = 0.4          # napis zostaje chwilę po ostatnim słowie
+LONG_PAUSE = 1.0        # dłuższa pauza zawsze kończy kwestię
 
 # język komunikatów: ten sam słownik co w translate_mkv.py, język przekazuje MKV_UI_LANG
 try:
@@ -112,7 +117,7 @@ MAX_REPEATS = 2                               # ta sama kwestia więcej razy z r
 
 def drop_hallucinations(cues):
     """Usuwa napisy-widma, zapętlenia (ta sama kwestia > MAX_REPEATS razy z rzędu) i kwestie o bardzo
-    niskiej pewności. cues: (start, koniec, tekst[, pewność]); zwraca (start, koniec, tekst) i liczbę usuniętych."""
+    niskiej pewności. cues: (start, koniec, tekst[, pewność]); zwraca (start, koniec, tekst, pewność) i liczbę usuniętych."""
     out, dropped, last, run = [], 0, None, 0
     for cue in cues:
         start, end, text = cue[:3]
@@ -125,27 +130,45 @@ def drop_hallucinations(cues):
         if HALLUCINATION_RE.search(text) or looped or confidence is not None and confidence < 0.3:
             dropped += 1
             continue
-        out.append((start, end, text))
+        out.append((start, end, text, confidence))
     return out, dropped
 
 
 # ---------------------------------------------------------------- Whisper
 
 def split_segment(words):
-    """Dzieli rozpoznany fragment na kwestie o rozmiarze napisów: (start, koniec, tekst)."""
-    cues, current = [], []
+    """Dzieli rozpoznany fragment na kwestie o rozmiarze napisów: (start, koniec, tekst).
+
+    Najpierw cięcia w długich pauzach; za długi kawałek dzielony w najlepszym miejscu: koniec zdania >
+    przecinek/myślnik > dłuższa pauza, z wolą podziału bliżej środka i bez jednowyrazowych resztek."""
+    groups, current = [], []
     for w in words:
-        if current:
-            text = "".join(x.word for x in current)
-            too_long = len(text) + len(w.word) > MAX_CUE_CHARS or w.end - current[0].start > MAX_CUE_SECONDS
-            sentence_end = text.rstrip().endswith((".", "!", "?", "…")) and len(text) > 30
-            if too_long or sentence_end or w.start - current[-1].end > 1.0:
-                cues.append(current)
-                current = []
+        if current and w.start - current[-1].end > LONG_PAUSE:
+            groups.append(current)
+            current = []
         current.append(w)
     if current:
-        cues.append(current)
-    return [(c[0].start, c[-1].end, "".join(x.word for x in c).strip()) for c in cues]
+        groups.append(current)
+    return [c for g in groups for c in _split_best(g)]
+
+
+def _split_best(words):
+    text = "".join(w.word for w in words).strip()
+    if len(words) < 2 or len(text) <= MAX_CUE_CHARS and words[-1].end - words[0].start <= MAX_CUE_SECONDS:
+        # pewność kwestii (B7): średnia pewność słów, gdy silnik ją podaje
+        probs = [p for p in (getattr(w, "probability", None) for w in words) if p is not None]
+        return [(words[0].start, words[-1].end, text, sum(probs) / len(probs) if probs else None)] if text else []
+    best, best_score = 1, None
+    for i in range(1, len(words)):
+        left = "".join(w.word for w in words[:i]).rstrip()
+        score = 3 if left.endswith((".", "!", "?", "…")) else 2 if left.endswith((",", ";", ":", "—", "–")) else 0
+        score += 2 * min(max(0.0, words[i].start - words[i - 1].end), 1.0)
+        score -= abs(len(left) - len(text) / 2) / max(1, len(text))   # bliżej środka = równiejsze kwestie
+        if i < 2 or len(words) - i < 2:
+            score -= 2                        # jednowyrazowa resztka na brzegu
+        if best_score is None or score > best_score:
+            best, best_score = i, score
+    return _split_best(words[:best]) + _split_best(words[best:])
 
 
 def load_wav(path):
@@ -188,6 +211,38 @@ def separate_vocals(audio, rate, device):
     return F.resample(torch.cat(parts), rate, 16000).numpy()
 
 
+ROFORMER_MODEL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"   # BS-RoFormer (wokal), audio-separator
+
+
+def separate_roformer(path, rate, device):
+    """Oddziela głos modelem BS-RoFormer (B6, lepszy od htdemucs w testach separacji); zwraca mono 16 kHz."""
+    import logging
+    import torch
+    import torchaudio.functional as F
+    from audio_separator.separator import Separator
+    out_dir = MODELS / "separator_out"
+
+    def load():
+        print(tr('    oddzielanie głosu od tła (BS-RoFormer) — wczytuję model...'), flush=True)
+        sep = Separator(log_level=logging.WARNING, model_file_dir=str(MODELS / "separator"), output_dir=str(out_dir),
+                        output_single_stem="Vocals", use_autocast=device == "cuda")
+        sep.load_model(ROFORMER_MODEL)
+        return sep
+
+    sep = cached(("roformer", device), load)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(tr('    oddzielanie głosu od tła (BS-RoFormer)...'), flush=True)
+    files = [out_dir / Path(f).name for f in sep.separate(str(path))]
+    try:
+        vocals, vrate = load_wav(files[0])
+    finally:
+        for f in files:
+            f.unlink(missing_ok=True)
+    torch.cuda.empty_cache()
+    mono = torch.from_numpy(vocals.mean(1).astype(np.float32))
+    return F.resample(mono, vrate, 16000).numpy()
+
+
 def use_torch_cuda_libs():
     """Udostępnia biblioteki CUDA dołączone do PyTorcha (dla ctranslate2 i onnxruntime); zwraca "cuda"/"cpu"."""
     import torch
@@ -214,11 +269,15 @@ def whisper_cues(audio, args, device, words_out=None):
     # ustawienia nastawione na to, żeby nie gubić kwestii: czuły wykrywacz mowy (ciche dialogi, mowa
     # na tle muzyki), zachowywanie fragmentów o niskiej pewności i brak "ciągnięcia" poprzedniego tekstu,
     # przez które Whisper potrafi przeskoczyć dłuższy fragment
-    segments, info = model.transcribe(
-        audio, language=args.language, word_timestamps=True, beam_size=8,
-        vad_filter=True, vad_parameters={"threshold": 0.25, "min_silence_duration_ms": 700, "speech_pad_ms": 500},
-        condition_on_previous_text=False, no_speech_threshold=0.85, log_prob_threshold=-1.5,
-        hallucination_silence_threshold=2.0)
+    options = dict(language=args.language, word_timestamps=True,
+                   vad_filter=True, vad_parameters={"threshold": 0.25, "min_silence_duration_ms": 700, "speech_pad_ms": 500},
+                   condition_on_previous_text=False, no_speech_threshold=0.85, log_prob_threshold=-1.5)
+    if args.whisper_batch:                    # B11: partie fragmentów naraz — kilka razy szybciej na mocnej karcie
+        from faster_whisper import BatchedInferencePipeline
+        pipe = cached(("whisper-batch", args.model, device), lambda: BatchedInferencePipeline(model))
+        segments, info = pipe.transcribe(audio, beam_size=5, batch_size=args.whisper_batch, **options)
+    else:
+        segments, info = model.transcribe(audio, beam_size=8, hallucination_silence_threshold=2.0, **options)
     cues = []
     for seg in segments:
         # pewność fragmentu: średnie prawdopodobieństwo słów, a gdy go brak — z avg_logprob
@@ -226,8 +285,9 @@ def whisper_cues(audio, args, device, words_out=None):
         confidence = sum(probs) / len(probs) if probs else 2.718 ** seg.avg_logprob
         if seg.avg_logprob < -1.0 and confidence < 0.4:
             confidence = 0.0                  # niska pewność dekodera i słów naraz — prawie zawsze widmo
-        parts = split_segment(seg.words) if seg.words else [(seg.start, seg.end, seg.text.strip())]
-        cues += [(*p, confidence) for p in parts]
+        parts = split_segment(seg.words) if seg.words else [(seg.start, seg.end, seg.text.strip(), None)]
+        # pewność kwestii z jej słów; fragment uznany za widmo (0.0) zostaje widmem w całości
+        cues += [(*p[:3], 0.0 if confidence == 0.0 else p[3] if p[3] is not None else confidence) for p in parts]
         if words_out is not None and confidence > 0:
             words_out += seg.words or []
         done = round(100 * seg.end / info.duration) if info.duration else 100
@@ -241,46 +301,135 @@ class Word:
         self.word, self.start, self.end = word, start, end
 
 
-def gigaam_cues(audio, device):
-    """GigaAM v3 (model tylko dla rosyjskiego) z podziałem na fragmenty mowy przez Silero VAD."""
+PARAKEET_MODEL = "nemo-parakeet-tdt-0.6b-v3"   # onnx-asr; rosyjski, angielski, ukraiński i inne
+GIGAAM_MODEL = "gigaam-v3-e2e-rnnt"          # z interpunkcją i wielkimi literami — lepsze wejście dla tłumacza
+
+
+VAD_SILENCE_MS, VAD_MAX_S = 250, 20           # cięcie mowy dla GigaAM: najkrótsza cisza i najdłuższy fragment
+
+
+def silero_path(vad):
+    """Folder z modelem Silero: "silero6" = v6 z pakietu silero-vad (mniej błędów na hałasie), "silero" = wbudowany."""
+    if vad == "silero6":
+        import silero_vad
+        return Path(silero_vad.__file__).parent / "data"
+    return None
+
+
+def gigaam_cues(audio, device, name=GIGAAM_MODEL, silence_ms=VAD_SILENCE_MS, max_s=VAD_MAX_S, vad_name="silero"):
+    """GigaAM (wariant name z onnx-asr) z podziałem na fragmenty mowy przez Silero VAD."""
     import onnx_asr
 
     def load():
-        print(tr('    GigaAM v3 ({0}) — wczytuję model...', device), flush=True)
+        print(tr('    {0} ({1}) — wczytuję model...', name, device), flush=True)
         cpu = ["CPUExecutionProvider"]
         # DEFAULT: bez tego cuDNN dobiera algorytm od nowa dla każdej długości fragmentu (kilkanaście razy wolniej)
         gpu = [("CUDAExecutionProvider", {"cudnn_conv_algo_search": "DEFAULT"})] if device == "cuda" else []
-        return onnx_asr.load_model("gigaam-v3-e2e-rnnt", providers=gpu + cpu), onnx_asr.load_vad("silero", providers=cpu)
+        return (onnx_asr.load_model(name, providers=gpu + cpu),
+                onnx_asr.load_vad("silero", silero_path(vad_name), providers=cpu))
 
-    model, vad = cached(("gigaam", device), load)
-    segments = model.with_vad(vad, threshold=0.25, min_silence_duration_ms=250, speech_pad_ms=150,
-                              max_speech_duration_s=20).with_timestamps().recognize(audio, sample_rate=16000)
+    model, vad = cached(("gigaam", name, vad_name, device), load)
+    segments = model.with_vad(vad, threshold=0.25, min_silence_duration_ms=silence_ms, speech_pad_ms=150,
+                              max_speech_duration_s=max_s).with_timestamps().recognize(audio, sample_rate=16000)
     total = len(audio) / 16000
     cues = []
     for seg in segments:
         words = []
-        for token, at in zip(seg.tokens or [], seg.timestamps or []):
+        logprobs = seg.logprobs or []
+        for n, (token, at) in enumerate(zip(seg.tokens or [], seg.timestamps or [])):
             if token.startswith(" ") or not words:
                 words.append(Word(token, seg.start + at, seg.end))
+                words[-1].logprobs = []
             else:
                 words[-1].word += token       # dalszy kawałek tego samego słowa albo znak interpunkcyjny
+            words[-1].last = seg.start + at
+            if n < len(logprobs):
+                words[-1].logprobs.append(logprobs[n])
+        for w in words:                       # pewność słowa = średnie prawdopodobieństwo jego tokenów
+            if w.logprobs:
+                w.probability = float(np.exp(np.mean(w.logprobs)))
+        # koniec słowa: krótko po jego ostatnim tokenie, nie dopiero na początku następnego (pauza to nie mowa)
         for prev, nxt in zip(words, words[1:]):
-            prev.end = nxt.start
-        cues += split_segment(words) if words else [(seg.start, seg.end, seg.text.strip())]
+            prev.end = min(nxt.start, prev.last + 0.3)
+        cues += split_segment(words) if words else [(seg.start, seg.end, seg.text.strip(), None)]
         print(tr('\r    rozpoznawanie mowy: {0}%', min(100, round(100 * seg.end / total))), end="", flush=True)
     print()
-    return merge_short(cues)
+    return cues
 
 
-def merge_short(cues, gap=0.35, max_chars=60, max_seconds=5.0):
-    """Skleja sąsiednie króciutkie kwestie (VAD tnie mowę na każdej pauzie) w czytelne napisy."""
+def merge_short(cues, gap=0.35, max_chars=MAX_CUE_CHARS, max_seconds=MAX_CUE_SECONDS):
+    """Skleja sąsiednie króciutkie kwestie (VAD tnie mowę na każdej pauzie) w czytelne napisy.
+    Po pytaniu nie skleja — odpowiedź zwykle mówi kto inny."""
     out = []
-    for start, end, text in cues:
-        if out and start - out[-1][1] <= gap and len(out[-1][2]) + len(text) < max_chars \
-                and end - out[-1][0] <= max_seconds:
-            out[-1] = (out[-1][0], end, f"{out[-1][2]} {text}")
+    for cue in cues:
+        start, end, text = cue[:3]
+        conf = cue[3] if len(cue) > 3 else None
+        if out and start - out[-1][1] <= gap and len(out[-1][2]) + len(text) + 1 <= max_chars \
+                and end - out[-1][0] <= max_seconds and not out[-1][2].rstrip().endswith("?"):
+            prev = out[-1]
+            if prev[3] is not None and conf is not None:   # pewność ważona długością tekstu
+                conf = (prev[3] * len(prev[2]) + conf * len(text)) / (len(prev[2]) + len(text))
+            out[-1] = (prev[0], end, f"{prev[2]} {text}", conf if conf is not None else prev[3])
         else:
-            out.append((start, end, text))
+            out.append((start, end, text, conf))
+    return out
+
+
+ALIGNER_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
+ALIGN_LANGS = {"ru": "Russian", "en": "English"}   # ukraińskiego aligner nie zna
+ALIGN_BATCH = 32
+
+
+def align_cues(audio, cues, language, device):
+    """B10: dokładne granice kwestii z wymuszonego wyrównania (Qwen3-ForcedAligner): początek pierwszego
+    i koniec ostatniego słowa w oknie kwestii ± 0,4 s. Kwestia, której wyrównanie zawiedzie, zostaje bez zmian."""
+    if language not in ALIGN_LANGS or not cues:
+        return cues
+    import torch
+    from qwen_asr import Qwen3ForcedAligner
+
+    def load():
+        print(tr('    wyrównanie czasów słów ({0}) — wczytuję model...', ALIGNER_MODEL), flush=True)
+        return Qwen3ForcedAligner.from_pretrained(ALIGNER_MODEL, dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+                                                  device_map=device)
+
+    model = cached(("aligner", device), load)
+    out, moved = list(cues), 0
+    for pos in range(0, len(cues), ALIGN_BATCH):
+        batch, spans = [], []
+        for k in range(pos, min(pos + ALIGN_BATCH, len(cues))):
+            start, end = max(0.0, cues[k][0] - 0.4), cues[k][1] + 0.4
+            batch.append((audio[int(start * 16000):int(end * 16000)], 16000))
+            spans.append((k, start))
+        try:
+            results = model.align(audio=batch, text=[cues[k][2] for k, _ in spans],
+                                  language=[ALIGN_LANGS[language]] * len(spans))
+        except Exception:                     # np. za krótki fragment — ta partia zostaje z czasami rozpoznania
+            log_error("align")
+            continue
+        for (k, offset), res in zip(spans, results):
+            items = [it for it in getattr(res, "items", []) if it.end_time > it.start_time]
+            if items:
+                new = (offset + items[0].start_time, offset + items[-1].end_time)
+                if new[1] - new[0] > 0.2:
+                    out[k] = (new[0], new[1], *cues[k][2:])
+                    moved += 1
+        print(tr('\r    wyrównanie czasów słów: {0}/{1}', min(pos + ALIGN_BATCH, len(cues)), len(cues)), end="", flush=True)
+    print()
+    return out
+
+
+def finish_cues(cues):
+    """Wspólne wykończenie kwestii obu silników: sklejenie okruchów, ogon po ostatnim słowie, najkrótszy czas
+    wyświetlania i przerwa 2 klatki przed następną kwestią (normy Netflix PL)."""
+    cues = merge_short(sorted(cues, key=lambda c: c[0]))
+    out = []
+    for k, (start, end, text, conf) in enumerate(cues):
+        nxt = cues[k + 1][0] if k + 1 < len(cues) else None
+        shown = max(end + CUE_TAIL, start + MIN_CUE_SECONDS)
+        if nxt is not None:
+            shown = min(shown, nxt - CUE_GAP)
+        out.append((start, max(shown, end), text, conf))
     return out
 
 
@@ -312,12 +461,12 @@ def combine_asr(g_cues, w_words, w_cues):
     owner = {}
     for k, w in enumerate(w_words):
         mid = (w.start + w.end) / 2
-        dist = [(0 if s <= mid <= e else min(abs(mid - s), abs(mid - e)), n) for n, (s, e, _) in enumerate(g_cues)]
+        dist = [(0 if s <= mid <= e else min(abs(mid - s), abs(mid - e)), n) for n, (s, e, *_) in enumerate(g_cues)]
         best = min(dist, default=(9, -1))
         if best[0] <= 0.6:
             owner.setdefault(best[1], []).append(k)
     rows, used = [], set()
-    for n, (start, end, text) in enumerate(g_cues):
+    for n, (start, end, text, *_) in enumerate(g_cues):
         ws = owner.get(n, [])
         used.update(ws)
         w_text = "".join(w_words[k].word for k in ws).strip()
@@ -344,35 +493,46 @@ def transcribe(args):
     audio, rate = load_wav(args.audio)
     mix = None
     if args.separate:
-        if args.engine == "ensemble":         # Whisper radzi sobie lepiej na miksie niż na głosie z Demucsa (B1)
+        if args.engine == "ensemble" or args.sep_mix:   # Whisper radzi sobie lepiej na miksie (B1)
             mix = to_mono16(audio, rate)
-        audio = separate_vocals(audio, rate, device)
+        if args.sep == "roformer":
+            audio = separate_roformer(args.audio, rate, device)
+        else:
+            audio = separate_vocals(audio, rate, device)
+        if args.sep_mix:                      # głos z domieszką oryginału: mniej zniekształceń z separacji
+            n = min(len(audio), len(mix))
+            audio = audio[:n] + args.sep_mix * mix[:n]
     elif rate != 16000 or audio.shape[1] != 1:
         sys.exit("Oczekiwano pliku WAV 16 kHz mono.")
     else:
         audio = audio[:, 0]
     if args.engine == "ensemble" and args.language == "ru":
         # B8: GigaAM (czasy, tekst) + Whisper (druga opinia); rozbieżności rozstrzyga model językowy w programie
-        g_cues, dropped = drop_hallucinations([c for c in gigaam_cues(audio, device) if c[2]])
+        g_cues, dropped = drop_hallucinations([c for c in gigaam_cues(audio, device, args.gigaam_model, args.vad_silence_ms, args.vad_max_s, args.vad) if c[2]])
         w_words = []
         w_cues = [c for c in whisper_cues(audio if mix is None else mix, args, device, w_words) if c[2]]
         clean = {c[0] for c in drop_hallucinations(w_cues)[0]}
         cues, variants = combine_asr(g_cues, w_words, [c for c in w_cues if c[0] in clean])
+        # bez sklejania: numery kwestii muszą się zgadzać z wariantami do rozstrzygnięcia
+        cues = [(st, max(min(en + CUE_TAIL, cues[k + 1][0] - CUE_GAP) if k + 1 < len(cues) else en + CUE_TAIL, en), tx)
+                for k, (st, en, tx) in enumerate(cues)]
         write_cues(cues, args.out)
         Path(args.out + ".warianty.json").write_text(json.dumps(variants, ensure_ascii=False), encoding="utf-8")
         print(tr('    rozpoznano {0} kwestii', len(cues)))
         return
     cues = None
+    if args.engine == "parakeet":             # B11: NVIDIA Parakeet TDT v3 (25 języków europejskich)
+        cues = gigaam_cues(audio, device, PARAKEET_MODEL, args.vad_silence_ms, args.vad_max_s, args.vad)
     if args.engine == "gigaam" and args.language == "ru":   # GigaAM zna tylko rosyjski
         # GigaAM potrafi sporadycznie paść przy wczytywaniu; ponawiamy, zamiast tracić gotowe oddzielenie głosu
         for attempt in range(1, 4):
             try:
-                cues = gigaam_cues(audio, device)
+                cues = gigaam_cues(audio, device, args.gigaam_model, args.vad_silence_ms, args.vad_max_s, args.vad)
                 break
             except Exception as e:
                 log_error(f"GigaAM, próba {attempt}")
                 traceback.print_exc()
-                _models.pop(("gigaam", device), None)   # następna próba wczytuje model od nowa
+                _models.pop(("gigaam", args.gigaam_model, args.vad, device), None)   # następna próba wczytuje model od nowa
                 print(tr('\n    GigaAM: błąd ({0}), próba {1} z 3', type(e).__name__, attempt), flush=True)
                 importlib.invalidate_caches()
                 time.sleep(5)
@@ -383,16 +543,27 @@ def transcribe(args):
     cues, dropped = drop_hallucinations([c for c in cues if c[2]])
     if dropped:
         print(tr('    usunięto {0} kwestii-widm (napisy z YouTube, zapętlenia, bardzo niska pewność)', dropped))
+    if args.align:
+        cues = align_cues(audio if mix is None else mix, cues, args.language, device)
+    cues = finish_cues(cues)
     write_cues(cues, args.out)
     print(tr('    rozpoznano {0} kwestii', len(cues)))
 
 
 def write_cues(cues, out):
+    """SRT (zapis atomowy) i obok <out>.pewnosc.json: pewność każdej kwestii (B7), gdy silnik ją podał."""
     tmp = Path(out + ".tmp")                   # zapis atomowy: przerwany nie zostawia niepełnego pliku
     with open(tmp, "w", encoding="utf-8") as f:
-        for i, (start, end, text) in enumerate(cues, 1):
+        for i, cue in enumerate(cues, 1):
+            start, end, text = cue[:3]
             f.write(f"{i}\n{srt_time(start)} --> {srt_time(end)}\n{text}\n\n")
     os.replace(tmp, out)
+    confidence = [round(c[3], 3) if len(c) > 3 and c[3] is not None else None for c in cues]
+    side = Path(out + ".pewnosc.json")
+    if any(c is not None for c in confidence):
+        side.write_text(json.dumps(confidence), encoding="utf-8")
+    else:
+        side.unlink(missing_ok=True)
 
 
 def detect(args):
@@ -840,8 +1011,23 @@ def main():
     t = sub.add_parser("transcribe")
     t.add_argument("audio")
     t.add_argument("out")
-    t.add_argument("--engine", choices=["whisper", "gigaam", "ensemble"], default="whisper")
+    t.add_argument("--engine", choices=["whisper", "gigaam", "ensemble", "parakeet"], default="whisper")
+    t.add_argument("--whisper-batch", type=int, default=0,
+                   help=tr('Whisper w partiach po N fragmentów (np. 16; 0 = po kolei)'))
     t.add_argument("--model", default=WHISPER_MODEL, help=tr('model Whisper'))
+    t.add_argument("--gigaam-model", default=GIGAAM_MODEL,
+                   help=tr('wariant GigaAM z onnx-asr (np. gigaam-v3-rnnt, gigaam-multilingual-large-ctc)'))
+    t.add_argument("--vad-silence-ms", type=int, default=VAD_SILENCE_MS,
+                   help=tr('GigaAM: najkrótsza cisza dzieląca mowę (ms)'))
+    t.add_argument("--align", action="store_true",
+                   help=tr('dokładne czasy kwestii z wyrównania (Qwen3-ForcedAligner; rosyjski i angielski)'))
+    t.add_argument("--sep", choices=["demucs", "roformer"], default="demucs",
+                   help=tr('model oddzielania głosu przy --separate'))
+    t.add_argument("--sep-mix", type=float, default=0.0,
+                   help=tr('domieszka oryginału do oddzielonego głosu (0 = sam głos, np. 0.3)'))
+    t.add_argument("--vad", choices=["silero", "silero6"], default="silero",
+                   help=tr('wykrywacz mowy dla GigaAM: silero (wbudowany) albo silero6 (Silero VAD v6)'))
+    t.add_argument("--vad-max-s", type=float, default=VAD_MAX_S, help=tr('GigaAM: najdłuższy fragment mowy (s)'))
     t.add_argument("--language", default="ru", help=tr('język mowy (ru, en, uk...); GigaAM obsługuje tylko ru'))
     t.add_argument("--separate", action="store_true",
                    help=tr('najpierw oddziel głos od muzyki (wejście: WAV stereo 44,1 kHz)'))

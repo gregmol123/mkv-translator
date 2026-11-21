@@ -4,6 +4,13 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+### Dodane
+- **Nowy podział rozpoznanej mowy na kwestie** wg norm Netflix PL: cięcie w najlepszym miejscu (koniec zdania, przecinek, pauza), 2 × 42 znaki, 0,83–7 s, przerwa 2 klatki, napis 0,4 s po ostatnim słowie; po pytaniu kwestie nie są sklejane. (B4)
+- **Pewność rozpoznania każdej kwestii** — raport jakości podaje liczbę niepewnych kwestii, powyżej 15% plik idzie „Do sprawdzenia”. (B7)
+- **Silnik „GigaAM-RNNT”**: dokładniejsze słowa (12,0% wobec 13,1% w pomiarze), interpunkcję i wielkie litery dopisuje model językowy bez zmiany słów. (B9)
+- **Whisper szybciej i dokładniej w czasie:** przetwarzanie w partiach (9× szybciej, 12,1% zamiast 12,6%) i wyrównanie czasów słów Qwen3-ForcedAligner (przesunięcie kwestii 275 → 153 ms) — domyślnie dla Whispera. (B10, B11)
+- Opcje do eksperymentów w `audio_tools.py` i `tools/asr_bench.py`: wariant GigaAM (`--gigaam-model`), cięcie mowy (`--vad-silence-ms`, `--vad-max-s`), Silero VAD v6 (`--vad silero6`), separacja BS-RoFormer (`--sep roformer`), domieszka oryginału (`--sep-mix`), silnik Parakeet. W pomiarach nie poprawiły wyniku, więc są wyłączone. (B2, B3, B5, B6, B11)
+
 ## [1.2] — 2026-11-21
 
 ### Dodane
