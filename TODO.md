@@ -1,6 +1,6 @@
 # Plan prac — MKV Translator
 
-Stan na 21.11.2026, 19:51. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
+Stan na 21.11.2026, 20:09. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
 
 ## Zrobione
 
@@ -76,8 +76,8 @@ _ok. 2–3 dni mojej pracy_
 
 _ok. 2–3 dni mojej pracy_
 
-- [ ] **D1** Przypięte wersje pakietów audio_env (uv pip compile, hashe) — S, ok. 1 h
-- [ ] **D2** Testy automatyczne (pytest) + test na 30-sekundowym MKV — M, ok. 4 h
-- [ ] **D3** Kontekst pliku zamiast stanu globalnego; ta sama ścieżka audio dla lektora i rozpoznawania — M, ok. 4 h
-- [ ] **D4** Podział programu na moduły; kopia dla Unraid generowana skryptem — L, 1–2 dni
+- [x] **D1** Przypięte wersje pakietów audio_env (uv pip compile, hashe) — S, ok. 1 h — zrobione 21.11 21:10
+- [x] **D2** Testy automatyczne (pytest) + test na 30-sekundowym MKV — M, ok. 4 h — zrobione 21.11 21:40
+- [ ] **D3** Kontekst pliku zamiast stanu globalnego; ta sama ścieżka audio dla lektora i rozpoznawania — M, ok. 4 h — W TOKU: lektor ścisza ścieżkę, z której rozpoznano mowę; zostało: kontekst pliku zamiast stanu globalnego
+- [x] **D4** Podział programu na moduły; kopia dla Unraid generowana skryptem — L, 1–2 dni — zrobione 21.11 21:30
 - [ ] **D5** Składanie MKV przez mkvmerge zamiast ffmpeg — M, ok. 4 h

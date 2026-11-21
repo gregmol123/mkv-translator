@@ -25,3 +25,7 @@ unraid/ui_en.py
 !reports/*.md
 !tools/
 !tools/*.py
+!gui.py
+!requirements-audio.lock
+!tests/
+!tests/*.py

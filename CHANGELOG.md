@@ -4,6 +4,18 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+### Zmienione
+- **Okno programu w osobnym pliku `gui.py`** — rdzeń (`translate_mkv.py`) jest krótszy, a wersja na serwer nie ładuje tkintera. (D4)
+- **Lektor ścisza tę ścieżkę dźwiękową, z której rozpoznano mowę**, a nie zawsze pierwszą. (D3, częściowo)
+- **Przypięte wersje pakietów audio** (`requirements-audio.lock`): `install_audio.bat` instaluje dokładnie sprawdzony zestaw (199 pakietów, torch z CUDA 12.8). (D1)
+
+### Dodane
+- **Testy automatyczne** (`python -m pytest tests`): 21 testów — napisy, normy, zdania, wykrywanie języka, podział mowy na kwestie, filtr widm i pełny przebieg na 30-sekundowym MKV (polska ścieżka, zachowana flaga „wymuszone”). (D2)
+- `tools/make_unraid.py` — kopiuje aktualny program do `unraid/` i opcjonalnie na udział serwera (bez nadpisywania `ustawienia.sh`).
+
+### Odłożone
+- Wpisywanie napisów przez mkvmerge (D5) — czeka na instalację MKVToolNix.
+
 ## [1.5] — 2026-11-21
 
 ### Dodane
