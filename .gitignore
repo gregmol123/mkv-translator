@@ -13,6 +13,7 @@
 !unraid/zainstaluj.sh
 !unraid/ustawienia.sh
 !.gitattributes
+!LICENSE
 # kopie programu dla serwera powstają przy wgrywaniu (README)
 unraid/translate_mkv.py
 unraid/ui_en.py

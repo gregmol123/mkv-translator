@@ -1,6 +1,6 @@
 # Plan prac — MKV Translator
 
-Stan na 21.11.2026, 21:10. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
+Stan na 21.11.2026, 21:26. Źródło: raport `reports/Ulepszenia MKV Translatora.md`. Wysiłek mojej pracy: S do godziny, M pół dnia, L dzień lub więcej. Koszt: 0 zł (wszystko lokalnie).
 
 ## Zrobione
 
@@ -23,7 +23,6 @@ Stan na 21.11.2026, 21:10. Źródło: raport `reports/Ulepszenia MKV Translatora
 
 ## Do decyzji (Ty)
 
-- [ ] **Z4** Licencja repozytorium na GitHubie (np. MIT) — bez niej inni nie mogą legalnie używać kodu — 2 min Twoje
 - [ ] **Z5** Wgranie nowej wersji na Unraid, gdy serwer będzie włączony (potem zainstaluj.sh w terminalu Unraid) — 5 min Twoje
 
 ## Etap 1 – szybkie poprawki, bezpieczeństwo danych

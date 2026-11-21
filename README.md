@@ -56,6 +56,10 @@ bash /mnt/user/system/mkv-translator/zainstaluj.sh
 
 Kontener co `CO_ILE_MINUT` sprawdza foldery i tłumaczy nowe pliki; postęp: `docker logs -f mkv-translator`.
 
-## Licencje modeli
+## Licencja
+
+Kod programu: [MIT](LICENSE) — wolno go używać, zmieniać i rozpowszechniać, także komercyjnie, z zachowaniem informacji o autorze.
+
+### Licencje modeli
 
 XTTS-v2 jest na licencji Coqui CPML (wyłącznie użytek niekomercyjny). Pozostałe modele mają własne licencje — sprawdź je przed użyciem.
