@@ -4,6 +4,8 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+## [1.6] — 2026-11-22
+
 ### Zmienione
 - **Okno programu w osobnym pliku `gui.py`** — rdzeń (`translate_mkv.py`) jest krótszy, a wersja na serwer nie ładuje tkintera. (D4)
 - **Lektor ścisza tę ścieżkę dźwiękową, z której rozpoznano mowę**, a nie zawsze pierwszą; wynik rozpoznania (ścieżka, mówcy, pewność) należy do pliku, a nie do wspólnego stanu programu, więc nie przechodzi na następny film. (D3)
@@ -13,7 +15,6 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 - **Licencja MIT** dla kodu programu (`LICENSE`); modele zachowują własne licencje (XTTS-v2 — tylko niekomercyjnie). (Z4)
 - **Testy automatyczne** (`python -m pytest tests`): 24 testy — napisy, normy, zdania, wykrywanie języka, podział mowy na kwestie, filtr widm i pełny przebieg na 30-sekundowym MKV (polska ścieżka, zachowana flaga „wymuszone”). (D2)
 - `tools/make_unraid.py` — kopiuje aktualny program do `unraid/` i opcjonalnie na udział serwera (bez nadpisywania `ustawienia.sh`).
-
 - **Składanie MKV przez mkvmerge** (MKVToolNix), gdy jest zainstalowany: rozdziały, załączniki, tagi i flagi ścieżek zostają w natywnej postaci Matroski; lektor powstaje w ffmpeg i jest dokładany jako osobna ścieżka. Bez MKVToolNix (np. na Unraid) program składa plik jak dotąd przez ffmpeg; `MKV_MKVMERGE=0` wymusza ffmpeg. (D5)
 
 ## [1.5] — 2026-11-21
