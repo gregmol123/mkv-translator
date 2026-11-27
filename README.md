@@ -17,17 +17,18 @@ Tłumaczy napisy filmów i seriali (rosyjskie, angielskie, ukraińskie) na **pol
 
 ```mermaid
 flowchart TD
-    A["Film"] --> B{"Polskie napisy już są?"}
+    A["Film"] --> B{"Polskie napisy<br/>już są?"}
     B -- tak --> Z["pomiń"]
     B -- nie --> S
     subgraph S["Źródło tekstu — pierwsze, które jest"]
         direction LR
         S1["napisy tekstowe"] -. brak .-> S2["napisy PGS (OCR)"] -. brak .-> S3["plik obok filmu"] -. brak .-> S4["rozpoznanie mowy<br/>GigaAM + Whisper"]
     end
-    S --> T["Tłumaczenie — gemma4:31b"]
-    T --> Q["Kontrola i naprawa — MetricX-24"]
-    Q --> M["Zapis do MKV — mkvmerge"]
-    M -.-> L["lektor (opcja)"]
+    S --> P
+    subgraph P["Tłumaczenie i zapis"]
+        direction LR
+        T["tłumaczenie<br/>gemma4:31b"] --> Q["kontrola i naprawa<br/>MetricX-24"] --> M["zapis do MKV<br/>mkvmerge"] -.-> L["lektor<br/>(opcja)"]
+    end
 ```
 
 1. **Sprawdzenie pliku.** Program czyta listę ścieżek. Film z polskimi napisami w środku albo obok jest pomijany. Ścieżek „wymuszonych” (tylko napisy na tablicach) nie tłumaczy.

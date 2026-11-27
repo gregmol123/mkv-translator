@@ -19,17 +19,18 @@ The program window and messages are available in Polish and English (language sw
 
 ```mermaid
 flowchart TD
-    A["Video"] --> B{"Polish subtitles already there?"}
+    A["Video"] --> B{"Polish subtitles<br/>already there?"}
     B -- yes --> Z["skip"]
     B -- no --> S
     subgraph S["Text source — first one found"]
         direction LR
         S1["text subtitles"] -. none .-> S2["PGS subtitles (OCR)"] -. none .-> S3["file next to video"] -. none .-> S4["speech recognition<br/>GigaAM + Whisper"]
     end
-    S --> T["Translation — gemma4:31b"]
-    T --> Q["Checks and repair — MetricX-24"]
-    Q --> M["Write to MKV — mkvmerge"]
-    M -.-> L["voice-over (option)"]
+    S --> P
+    subgraph P["Translation and output"]
+        direction LR
+        T["translation<br/>gemma4:31b"] --> Q["checks and repair<br/>MetricX-24"] --> M["write to MKV<br/>mkvmerge"] -.-> L["voice-over<br/>(option)"]
+    end
 ```
 
 1. **File check.** The program reads the list of tracks. A video that already has Polish subtitles inside or next to it is skipped. “Forced” tracks (signs only) are not translated.
