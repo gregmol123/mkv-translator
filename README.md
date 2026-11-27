@@ -16,22 +16,20 @@ Tłumaczy napisy filmów i seriali (rosyjskie, angielskie, ukraińskie) na **pol
 ## Jak to działa
 
 ```mermaid
-flowchart TD
-    A["Film<br/>MKV / MP4 / AVI"] --> B{"Są już polskie napisy?<br/>ffprobe, pliki obok filmu"}
-    B -- tak --> Z["pomiń: „Ma polskie”"]
-    B -- nie --> S
-    subgraph S["Skąd wziąć tekst — pierwsze, które zadziała"]
-        direction LR
-        S1["a. napisy tekstowe<br/>SRT / ASS w pliku"]
-        S2["b. napisy obrazkowe PGS<br/>OCR: EasyOCR"]
-        S3["c. plik napisów<br/>obok filmu"]
-        S4["d. rozpoznanie mowy<br/>Silero VAD → GigaAM v3 + Whisper large-v3<br/>model językowy wybiera lepszą wersję"]
+flowchart LR
+    A["Film"] --> B{"Polskie napisy<br/>już są?"}
+    B -- tak --> Z["pomiń"]
+    B -- nie --> S1
+    subgraph S["Źródło tekstu"]
+        direction TB
+        S1["1. napisy tekstowe"] -. brak .-> S2["2. napisy PGS (OCR)"]
+        S2 -. brak .-> S3["3. plik obok filmu"]
+        S3 -. brak .-> S4["4. rozpoznanie mowy<br/>GigaAM + Whisper"]
     end
-    S --> T["Tłumaczenie — Ollama, gemma4:31b<br/>partie po 30 kwestii, streszczenie odcinka,<br/>słowniczek imion, płeć mówiących, kontekst"]
-    T --> Q["Kontrola: MetricX-24 → naprawa słabych kwestii (translategemma:27b)<br/>→ jedna pisownia imion → polskie normy zapisu → czasy i tempo czytania"]
-    Q --> O["Ocena pliku: „Gotowe” / „Do sprawdzenia”<br/>raport_jakosci.csv"]
-    O --> M["Polska ścieżka w MKV<br/>mkvmerge (zapas: ffmpeg), kontrola przed podmianą"]
-    M -.-> L["opcja: lektor<br/>Piper / XTTS-v2"]
+    S --> T["Tłumaczenie<br/>gemma4:31b"]
+    T --> Q["Kontrola i naprawa<br/>MetricX-24"]
+    Q --> M["Zapis do MKV<br/>mkvmerge"]
+    M -.-> L["lektor (opcja)"]
 ```
 
 1. **Sprawdzenie pliku.** Program czyta listę ścieżek. Film z polskimi napisami w środku albo obok jest pomijany. Ścieżek „wymuszonych” (tylko napisy na tablicach) nie tłumaczy.

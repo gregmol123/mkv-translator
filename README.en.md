@@ -18,22 +18,20 @@ The program window and messages are available in Polish and English (language sw
 ## How it works
 
 ```mermaid
-flowchart TD
-    A["Video<br/>MKV / MP4 / AVI"] --> B{"Already has Polish subtitles?<br/>ffprobe, files next to the video"}
-    B -- yes --> Z["skip: “Has Polish”"]
-    B -- no --> S
-    subgraph S["Where the text comes from — first one that works"]
-        direction LR
-        S1["a. text subtitles<br/>SRT / ASS in the file"]
-        S2["b. PGS image subtitles<br/>OCR: EasyOCR"]
-        S3["c. subtitle file<br/>next to the video"]
-        S4["d. speech recognition<br/>Silero VAD → GigaAM v3 + Whisper large-v3<br/>language model picks the better version"]
+flowchart LR
+    A["Video"] --> B{"Polish subtitles<br/>already there?"}
+    B -- yes --> Z["skip"]
+    B -- no --> S1
+    subgraph S["Text source"]
+        direction TB
+        S1["1. text subtitles"] -. none .-> S2["2. PGS subtitles (OCR)"]
+        S2 -. none .-> S3["3. file next to video"]
+        S3 -. none .-> S4["4. speech recognition<br/>GigaAM + Whisper"]
     end
-    S --> T["Translation — Ollama, gemma4:31b<br/>batches of 30 lines, episode summary,<br/>name glossary, speaker gender, context"]
-    T --> Q["Checks: MetricX-24 → repair of weak lines (translategemma:27b)<br/>→ one spelling of names → Polish typesetting rules → timing and reading speed"]
-    Q --> O["File verdict: “Done” / “Needs review”<br/>raport_jakosci.csv"]
-    O --> M["Polish track in the MKV<br/>mkvmerge (fallback: ffmpeg), check before replacing"]
-    M -.-> L["option: voice-over<br/>Piper / XTTS-v2"]
+    S --> T["Translation<br/>gemma4:31b"]
+    T --> Q["Checks and repair<br/>MetricX-24"]
+    Q --> M["Write to MKV<br/>mkvmerge"]
+    M -.-> L["voice-over (option)"]
 ```
 
 1. **File check.** The program reads the list of tracks. A video that already has Polish subtitles inside or next to it is skipped. “Forced” tracks (signs only) are not translated.
