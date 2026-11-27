@@ -16,19 +16,17 @@ Tłumaczy napisy filmów i seriali (rosyjskie, angielskie, ukraińskie) na **pol
 ## Jak to działa
 
 ```mermaid
-flowchart LR
-    A["Film"] --> B{"Polskie napisy<br/>już są?"}
+flowchart TD
+    A["Film"] --> B{"Polskie napisy już są?"}
     B -- tak --> Z["pomiń"]
-    B -- nie --> S1
-    subgraph S["Źródło tekstu"]
-        direction TB
-        S1["1. napisy tekstowe"] -. brak .-> S2["2. napisy PGS (OCR)"]
-        S2 -. brak .-> S3["3. plik obok filmu"]
-        S3 -. brak .-> S4["4. rozpoznanie mowy<br/>GigaAM + Whisper"]
+    B -- nie --> S
+    subgraph S["Źródło tekstu — pierwsze, które jest"]
+        direction LR
+        S1["napisy tekstowe"] -. brak .-> S2["napisy PGS (OCR)"] -. brak .-> S3["plik obok filmu"] -. brak .-> S4["rozpoznanie mowy<br/>GigaAM + Whisper"]
     end
-    S --> T["Tłumaczenie<br/>gemma4:31b"]
-    T --> Q["Kontrola i naprawa<br/>MetricX-24"]
-    Q --> M["Zapis do MKV<br/>mkvmerge"]
+    S --> T["Tłumaczenie — gemma4:31b"]
+    T --> Q["Kontrola i naprawa — MetricX-24"]
+    Q --> M["Zapis do MKV — mkvmerge"]
     M -.-> L["lektor (opcja)"]
 ```
 

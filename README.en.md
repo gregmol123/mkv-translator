@@ -18,19 +18,17 @@ The program window and messages are available in Polish and English (language sw
 ## How it works
 
 ```mermaid
-flowchart LR
-    A["Video"] --> B{"Polish subtitles<br/>already there?"}
+flowchart TD
+    A["Video"] --> B{"Polish subtitles already there?"}
     B -- yes --> Z["skip"]
-    B -- no --> S1
-    subgraph S["Text source"]
-        direction TB
-        S1["1. text subtitles"] -. none .-> S2["2. PGS subtitles (OCR)"]
-        S2 -. none .-> S3["3. file next to video"]
-        S3 -. none .-> S4["4. speech recognition<br/>GigaAM + Whisper"]
+    B -- no --> S
+    subgraph S["Text source — first one found"]
+        direction LR
+        S1["text subtitles"] -. none .-> S2["PGS subtitles (OCR)"] -. none .-> S3["file next to video"] -. none .-> S4["speech recognition<br/>GigaAM + Whisper"]
     end
-    S --> T["Translation<br/>gemma4:31b"]
-    T --> Q["Checks and repair<br/>MetricX-24"]
-    Q --> M["Write to MKV<br/>mkvmerge"]
+    S --> T["Translation — gemma4:31b"]
+    T --> Q["Checks and repair — MetricX-24"]
+    Q --> M["Write to MKV — mkvmerge"]
     M -.-> L["voice-over (option)"]
 ```
 
