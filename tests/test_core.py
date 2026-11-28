@@ -121,6 +121,28 @@ def test_short_name():
     assert short_name("Serial.S01.E01.2024.Grupa.mkv") == "Serial S01E01"
 
 
+def test_speech_translated_report_and_log(tmp_path):
+    """Pliki ze słuchu: nowa kolumna "źródło", a dla starych wierszy — wpis w dzienniku; późniejsze z napisów wypada."""
+    report, log = tmp_path / "r.csv", tmp_path / "d.txt"
+    report.write_text("data;ocena;kwestii;uwagi;plik\n"
+                      "2026-11-01 10:00;Gotowe;9;x;H:\\A\\a1.mkv\n"
+                      "2026-11-01 11:00;Gotowe;9;x;H:\\A\\a2.mkv\n"
+                      "2026-11-02 10:00;Gotowe;9;x;H:\\B\\b1.mkv;słuch (gigaam+whisper)\n"
+                      "2026-11-02 11:00;Gotowe;9;x;H:\\B\\b2.mkv;napisy\n"
+                      "2026-11-03 10:00;Gotowe;9;x;H:\\A\\a2.mkv;napisy\n", encoding="utf-8-sig")
+    log.write_text("[10:00] a1.mkv\n    brak wbudowanych napisów — rozpoznaję mowę z dźwięku\n"
+                   "[11:00] a2.mkv\n    brak wbudowanych napisów — rozpoznaję mowę z dźwięku\n", encoding="utf-8")
+    assert t.speech_translated(report, log) == {"H:\\A\\a1.mkv": "2026-11-01 10:00", "H:\\B\\b1.mkv": "2026-11-02 10:00"}
+
+
+def test_locate_done(tmp_path):
+    moved = tmp_path / "skonczone" / "Serial" / "odc.mkv"
+    moved.parent.mkdir(parents=True)
+    moved.write_bytes(b"x")
+    assert t.locate_done(tmp_path / "A" / "Serial" / "odc.mkv") == moved
+    assert t.locate_done(tmp_path / "A" / "Inny" / "odc.mkv") is None
+
+
 def test_transcribe_info_is_per_file(tmp_path):
     """D3: ścieżka audio z rozpoznania trafia do słownika pliku, nie do wspólnego stanu."""
     import argparse

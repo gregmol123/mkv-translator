@@ -1410,18 +1410,63 @@ def shorten_fast(cues, engine, limit=20, target=17):
     return cues, changed
 
 
-def report_quality(video, verdict, summary, count):
-    """Dopisuje wynik do zbiorczego raportu jakości (CSV otwierany w Excelu)."""
+SPEECH_SOURCE = "słuch"                       # kolumna "źródło" w raporcie: "słuch (silnik)" albo "napisy"
+
+
+def report_quality(video, verdict, summary, count, source=""):
+    """Dopisuje wynik do zbiorczego raportu jakości (CSV otwierany w Excelu).
+    Ostatnia kolumna — źródło tekstu (wiersze ze starszych wersji jej nie mają)."""
     import csv
     try:
         new = not QUALITY_REPORT.exists()
         with open(QUALITY_REPORT, "a", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f, delimiter=";")
             if new:
-                w.writerow([tr('data'), tr('ocena'), tr('kwestii'), tr('uwagi'), tr('plik')])
-            w.writerow([time.strftime("%Y-%m-%d %H:%M"), verdict, count, summary, str(video)])
+                w.writerow([tr('data'), tr('ocena'), tr('kwestii'), tr('uwagi'), tr('plik'), tr('źródło')])
+            w.writerow([time.strftime("%Y-%m-%d %H:%M"), verdict, count, summary, str(video), source])
     except OSError:
         pass
+
+
+def speech_translated(report=None, log=None):
+    """Pliki przetłumaczone z rozpoznanej mowy -> data ostatniego tłumaczenia.
+
+    Źródło: kolumna "źródło" raportu jakości; dla wierszy ze starszych wersji (bez tej kolumny) — dziennik
+    programu, w którym przy każdym pliku jest wpis "rozpoznaję mowę z dźwięku" (łączony po nazwie pliku).
+    Plik przetłumaczony później z napisów wypada z listy."""
+    import csv
+    report = Path(report or QUALITY_REPORT)
+    log = Path(log or APP_DIR / "dziennik.txt")
+    heard = set()                             # nazwy plików, przy których dziennik zapisał rozpoznawanie mowy
+    try:
+        name = None
+        with open(log, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = re.match(r"\[\d\d:\d\d\] (.+)$", line.rstrip())
+                if m:
+                    name = m.group(1).strip()
+                elif name and ("rozpoznaję mowę" in line or "recognizing speech" in line):
+                    heard.add(name)
+    except OSError:
+        pass
+    found = {}
+    try:
+        with open(report, encoding="utf-8-sig", newline="") as f:
+            for row in csv.reader(f, delimiter=";"):
+                if len(row) < 5 or not re.match(r"\d{4}-\d\d-\d\d", row[0]):
+                    continue                  # nagłówek albo uszkodzony wiersz
+                path = row[4]
+                if len(row) > 5 and row[5]:
+                    speech = row[5].startswith(SPEECH_SOURCE)
+                else:
+                    speech = Path(path).name in heard
+                if speech:
+                    found[path] = row[0]
+                else:
+                    found.pop(path, None)
+    except OSError:
+        pass
+    return found
 
 
 CONTEXT_NEXT, CONTEXT_PAIRS = 4, 5          # kwestie po partii i gotowe pary tłumaczeń w zapytaniu
@@ -2098,7 +2143,7 @@ def process_subtitle(sub, args, engine):
     print(tr('    {0} kwestii, język: {1}', len(cues), LANGS[lang][0]))
     quality = {}
     write_srt(translate_cues(cues, engine, part, args.resume or not args.force, glossary_file(sub), quality), out)
-    report_quality(sub, quality["verdict"], quality["summary"], len(cues))
+    report_quality(sub, quality["verdict"], quality["summary"], len(cues), "napisy")
     print(tr('    zapisano {0}', out.name))
     return quality["verdict"]
 
@@ -2524,7 +2569,8 @@ def process(mkv, args, engine):
                 quality["summary"] += tr(', niepewne rozpoznanie mowy: {0} kwestii', asr["unsure"])
                 if asr["unsure"] > ASR_UNSURE_SHARE * asr["total"]:
                     quality["verdict"] = "Do sprawdzenia"
-            report_quality(mkv, quality["verdict"], quality["summary"], len(cues))
+            report_quality(mkv, quality["verdict"], quality["summary"], len(cues),
+                           f"{SPEECH_SOURCE} ({args.asr})" if from_speech else "napisy")
             print(tr('    zapisano {0}', srt_out.name))
             if sidecar:
                 mkv.with_suffix(".rozpoznane.ru.srt").unlink(missing_ok=True)   # plik pośredni
@@ -2841,6 +2887,21 @@ def done_target(path, root):
     if len(rel.parts) == 1 and root.name:
         rel = Path(root.name) / rel
     return (root.parent if root.name else root) / DONE_DIR / rel
+
+
+def locate_done(path):
+    """Gdzie jest teraz plik z raportu: na starym miejscu albo przeniesiony do folderu skonczone
+    (sprawdza każdy folder nadrzędny jako ten, który był dodany do kolejki). None, gdy go nie ma."""
+    path = Path(path)
+    if path.exists():
+        return path
+    for root in path.parents:
+        if not root.name:
+            break
+        candidate = done_target(path, root)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def move_done(path, root):

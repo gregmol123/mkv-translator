@@ -127,8 +127,10 @@ class QueueApp:
         self.fill_menu(menu, ((tr('Ustaw równoległość w Ollamie teraz (restart Ollamy)'),
                                lambda: self.apply_parallel(then_start=False)),
                               (tr('Popraw oznaczone „Do sprawdzenia”'), self.repair_flagged),
+                              (tr('Seriale tłumaczone ze słuchu...'), self.speech_dialog),
                               (tr('Sprawdź, które pliki mają już napisy'), self.check_polish),
                               (tr('Nazwy Plex...'), self.plex_dialog), (tr('Zamień TS → MKV'), self.ts_to_mkv), None,
+                              (tr('Zapisz kolejkę do pliku...'), self.export_queue),
                               (tr('Usuń zakończone z kolejki'), self.clear_done), (tr('Wyczyść całą kolejkę'), self.clear),
                               None, (tr('Raport jakości tłumaczeń'), self.open_report), (tr('Otwórz dziennik'), self.open_log),
                               (tr('Sprawdź instalację'), self.check_install), None,
@@ -531,18 +533,33 @@ class QueueApp:
         except (FatalError, OSError) as e:
             print(tr('    nie przeniesiono do „{0}”: {1}', DONE_DIR, e))
 
+    def start_dir(self, chosen=None):
+        """Folder, w którym otwierają się okna wyboru: ostatnio użyty, a na początku MKV_START_DIR (np. W:\\plex)."""
+        if chosen:
+            self.last_dir = str(Path(chosen if Path(chosen).is_dir() else Path(chosen).parent))
+            return self.last_dir
+        for folder in (getattr(self, "last_dir", None), os.environ.get("MKV_START_DIR")):
+            if folder and Path(folder).is_dir():
+                return folder
+        return None
+
     def add_files(self):
         from tkinter import filedialog
-        self.add(filedialog.askopenfilenames(
-            title=tr('Wybierz filmy MKV lub pliki napisów'),
+        files = filedialog.askopenfilenames(
+            title=tr('Wybierz filmy MKV lub pliki napisów'), initialdir=self.start_dir(),
             filetypes=[(tr("Filmy i napisy"), "*.mkv *.avi *.mp4 *.m4v *.ts *.mov *.wmv *.mpg *.webm *.srt *.ass *.ssa *.vtt *.sub"),
                        ("Matroska", "*.mkv"),
-                       (tr("Napisy"), "*.srt *.ass *.ssa *.vtt *.sub")]))
+                       (tr("Napisy"), "*.srt *.ass *.ssa *.vtt *.sub")])
+        if files:
+            self.start_dir(files[0])
+            self.add(files)
 
     def add_folder(self):
         from tkinter import filedialog
-        folder = filedialog.askdirectory(title=tr('Wybierz folder z filmami MKV lub napisami'))
+        folder = filedialog.askdirectory(title=tr('Wybierz folder z filmami MKV lub napisami'),
+                                         initialdir=self.start_dir())
         if folder:
+            self.start_dir(str(Path(folder).parent))
             self.add([folder])
 
     def remove(self):
@@ -550,6 +567,33 @@ class QueueApp:
             if item != self.current:          # pliku w toku nie da się usunąć
                 self.tree.delete(item)
         self.update_status()
+
+    def export_queue(self):
+        """Zrzut kolejki: .csv (Excel: plik, folder, napisy, stan) albo .txt (pełne ścieżki, jedna w wierszu)."""
+        from tkinter import filedialog, messagebox
+        items = self.tree.get_children()
+        if not items:
+            messagebox.showinfo("MKV Translator", tr('Kolejka jest pusta.'))
+            return
+        path = filedialog.asksaveasfilename(
+            title=tr('Zapisz kolejkę do pliku'), defaultextension=".csv", initialfile="kolejka.csv",
+            filetypes=[(tr("Tabela CSV (Excel)"), "*.csv"), (tr("Lista ścieżek (tekst)"), "*.txt")])
+        if not path:
+            return
+        rows = [[self.tree.set(i, c) for c in ("file", "dir", "track", "state")] for i in items]
+        try:
+            if path.lower().endswith(".txt"):
+                Path(path).write_text("".join(str(Path(d) / f) + "\n" for f, d, _, _ in rows), encoding="utf-8")
+            else:
+                import csv
+                with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+                    w = csv.writer(fh, delimiter=";")
+                    w.writerow([tr("Plik"), tr("Folder"), tr("Napisy"), tr("Stan")])
+                    w.writerows(rows)
+        except OSError as e:
+            messagebox.showerror("MKV Translator", tr('Nie zapisano kolejki: {0}', e))
+            return
+        messagebox.showinfo("MKV Translator", tr('Zapisano {0} pozycji kolejki do {1}', len(rows), path))
 
     def clear_done(self):
         for item in self.tree.get_children():
@@ -883,6 +927,82 @@ class QueueApp:
         self.update_status()
         if not self.running:
             self.start()
+
+    def speech_dialog(self):
+        """Seriale (foldery), w których tłumaczono z rozpoznanej mowy — do ponownego przerobienia nową wersją."""
+        from tkinter import filedialog, messagebox
+        files = speech_translated()
+        if not files:
+            messagebox.showinfo("MKV Translator", tr('W raporcie jakości i dzienniku nie ma plików tłumaczonych ze słuchu.'))
+            return
+        tk, ttk = self.tk, self.ttk
+        groups = {}                           # folder serii -> [(plik z raportu, gdzie jest teraz, data)]
+        for path, date in files.items():
+            groups.setdefault(str(Path(path).parent), []).append((path, locate_done(path), date))
+        win = tk.Toplevel(self.root)
+        win.title(tr('Seriale tłumaczone ze słuchu'))
+        win.geometry("1000x560")
+        win.transient(self.root)
+        frame = ttk.Frame(win, padding=10)
+        frame.pack(fill="both", expand=True)
+        total = sum(len(v) for v in groups.values())
+        ttk.Label(frame, text=tr('{0} plików w {1} folderach. Zaznacz seriale (Ctrl/Shift), które mają być przetłumaczone od nowa — rozpoznanie mowy i tłumaczenie obecną wersją programu. Obecne polskie napisy zostaną zastąpione.', total, len(groups)),
+                  wraplength=960, justify="left").pack(anchor="w", pady=(0, 6))
+        table = ttk.Treeview(frame, columns=("dir", "count", "found", "date"), show="headings", selectmode="extended")
+        for col, text, width, stretch in (("dir", tr("Folder"), 640, True), ("count", tr("plików"), 70, False),
+                                          ("found", tr("na dysku"), 80, False), ("date", tr("ostatnio"), 130, False)):
+            table.heading(col, text=text)
+            table.column(col, width=width, stretch=stretch)
+        scroll = ttk.Scrollbar(frame, command=table.yview)
+        table.configure(yscrollcommand=scroll.set)
+        rows = {}
+        for folder, entries in sorted(groups.items(), key=lambda kv: max(e[2] for e in kv[1]), reverse=True):
+            found = sum(1 for e in entries if e[1])
+            rows[table.insert("", "end", values=(folder, len(entries), found, max(e[2] for e in entries)))] = entries
+        buttons = ttk.Frame(frame)
+        buttons.pack(side="bottom", fill="x", pady=(8, 0))
+        scroll.pack(side="right", fill="y")
+        table.pack(fill="both", expand=True)
+
+        def chosen():
+            return [e for item in (table.selection() or ()) for e in rows[item]]
+
+        def add_selected():
+            entries = [e for e in chosen() if e[1]]
+            if not entries:
+                messagebox.showinfo("MKV Translator", tr('Zaznacz seriale, których pliki są na dysku.'), parent=win)
+                return
+            if not messagebox.askyesno("MKV Translator", tr('Dodać {0} plików do kolejki do tłumaczenia od nowa?\n\nObecne polskie napisy zostaną zastąpione nowymi.', len(entries)), parent=win):
+                return
+            wanted = {str(e[1].resolve()) for e in entries}
+            self.add([str(e[1]) for e in entries])
+            for item in self.tree.get_children():
+                if item != self.current and \
+                        str((Path(self.tree.set(item, "dir")) / self.tree.set(item, "file")).resolve()) in wanted:
+                    self.modes[item] = "repair"
+                    self.set_state(item, self.WAITING)
+            self.update_status()
+            win.destroy()
+
+        def save_list():
+            path = filedialog.asksaveasfilename(parent=win, title=tr('Zapisz listę do pliku'), defaultextension=".csv",
+                                                initialfile="ze_sluchu.csv", filetypes=[(tr("Tabela CSV (Excel)"), "*.csv")])
+            if not path:
+                return
+            import csv
+            try:
+                with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+                    w = csv.writer(fh, delimiter=";")
+                    w.writerow([tr("Folder"), tr("Plik"), tr("ostatnio"), tr("teraz")])
+                    for folder, entries in sorted(groups.items()):
+                        for old, now, date in sorted(entries):
+                            w.writerow([folder, Path(old).name, date, str(now) if now else tr("brak na dysku")])
+            except OSError as e:
+                messagebox.showerror("MKV Translator", tr('Nie zapisano listy: {0}', e), parent=win)
+
+        ttk.Button(buttons, text=tr('Dodaj zaznaczone do kolejki (od nowa)'), command=add_selected).pack(side="left")
+        ttk.Button(buttons, text=tr('Zapisz listę do pliku...'), command=save_list).pack(side="left", padx=6)
+        ttk.Button(buttons, text=tr('Zamknij'), command=win.destroy).pack(side="right")
 
     def test_notify(self):
         topic = self.ntfy_topic.get().strip()

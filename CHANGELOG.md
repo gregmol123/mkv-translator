@@ -4,6 +4,11 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+- Narzędzia → „Zapisz kolejkę do pliku...”: cała kolejka (także zakończone pliki) do tabeli CSV dla Excela (plik, folder, napisy, stan) albo do listy pełnych ścieżek .txt.
+- Narzędzia → „Seriale tłumaczone ze słuchu...”: lista folderów, w których tłumaczono z rozpoznanej mowy (z raportu jakości i dziennika), z liczbą plików na dysku; zaznaczone seriale trafiają do kolejki do tłumaczenia od nowa, listę można zapisać do CSV. Przeniesione do „skonczone” pliki są odnajdywane.
+- Raport jakości ma nową kolumnę „źródło” (słuch z nazwą silnika albo napisy).
+- Okna wyboru plików i folderów otwierają się w ostatnio użytym folderze, a na początku w folderze ze zmiennej `MKV_START_DIR` (np. `W:\plex`).
+
 ## [1.6] — 2026-11-22
 
 ### Zmienione
