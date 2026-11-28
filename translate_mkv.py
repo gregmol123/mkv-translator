@@ -93,7 +93,7 @@ def source_order(source):
 LINE_WIDTH = 42          # maksymalna długość linii napisów
 GOOGLE_CHAR_LIMIT = 4500
 CLAUDE_MODEL = "claude-opus-5-5"
-VERSION = "1.6"                            # numer wydania (GitHub Releases) — w tytule okna, dzienniku i --version
+VERSION = "1.7"                            # numer wydania (GitHub Releases) — w tytule okna, dzienniku i --version
 OLLAMA_MODEL = "gemma4:31b"
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
