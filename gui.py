@@ -88,6 +88,8 @@ class QueueApp:
         self.modes = {}                       # przerwane pliki: "resume" albo "restart"
         self.states = {}                      # stan pliku (klucz po polsku); w tabeli widać tr(stan)
         self.tracks = {}                      # ścieżka napisów wybrana ręcznie dla pliku (numer od 1)
+        self.prios = {}                       # priorytet pliku: 1 wysoki, -1 niski (brak = normalny)
+        self.drag = None                      # przeciągany wiersz kolejki
         self.alive = True                     # False po przebudowie okna w innym języku
         self.roots = {}                       # folder dodany do kolejki, z którego pochodzi plik
         self.move_flag = False                # stan pola "gotowe → skonczone" odczytany w wątku okna
@@ -101,14 +103,11 @@ class QueueApp:
         sys.stdout = sys.stderr = LogWriter(self.events, queue_file.with_name("dziennik.txt") if queue_file else None)
 
         root.title(tr('MKV Translator {0} — tłumaczenie napisów', VERSION))
-        root.geometry("1320x800")
-        root.minsize(1040, 600)
-        style = ttk.Style()
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
-        style.configure("Treeview", rowheight=24)
-        style.configure("Start.TButton", font=("Segoe UI", 10, "bold"), padding=(14, 4))
-        style.configure("Head.TLabelframe.Label", font=("Segoe UI", 9, "bold"))
+        self.scale = max(1.0, root.winfo_fpixels("1i") / 96)   # skalowanie ekranu (1.0 = 100%)
+        px = self.px
+        root.geometry(f"{min(px(1320), root.winfo_screenwidth() - 40)}x{min(px(800), root.winfo_screenheight() - 90)}")
+        root.minsize(px(1040), px(600))
+        self.apply_theme(ttk.Style())
 
         # ---- pasek narzędzi: dodawanie i porządkowanie kolejki | narzędzia | start/stop
         bar = ttk.Frame(root, padding=(10, 10, 10, 6))
@@ -118,11 +117,18 @@ class QueueApp:
         self.recursive = tk.BooleanVar(value=True)
         ttk.Checkbutton(bar, text=tr('z podfolderami'), variable=self.recursive).pack(side="left", padx=(6, 0))
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
-        for label, cmd in (("▲", lambda: self.move(-1)), ("▼", lambda: self.move(1)),
-                           (tr("↻ Ponów"), self.requeue), (tr("✕ Usuń"), self.remove)):
-            ttk.Button(bar, text=label, command=cmd, width=len(label) + 2).pack(side="left", padx=(0, 4))
+        for label, cmd in (("⤒", self.move_top), ("▲", lambda: self.move(-1)), ("▼", lambda: self.move(1)),
+                           ("⤓", self.move_bottom)):
+            ttk.Button(bar, text=label, command=cmd, width=3, style="Icon.TButton").pack(side="left", padx=(0, 2))
+        prio_btn = ttk.Menubutton(bar, text=tr('Priorytet'), width=len(tr('Priorytet')) + 1)
+        prio_menu = tk.Menu(prio_btn, tearoff=False)
+        self.fill_menu(prio_menu, [(tr(label), lambda p=p: self.prioritize(p)) for p, label in self.PRIORITIES.items()])
+        prio_btn["menu"] = prio_menu
+        prio_btn.pack(side="left", padx=(6, 4))
+        for label, cmd in ((tr("↻ Ponów"), self.requeue), (tr("✕ Usuń"), self.remove)):
+            ttk.Button(bar, text=label, command=cmd, width=len(label) + 1).pack(side="left", padx=(0, 4))
         ttk.Separator(bar, orient="vertical").pack(side="left", fill="y", padx=10)
-        tools = ttk.Menubutton(bar, text=tr('Narzędzia'))
+        tools = ttk.Menubutton(bar, text=tr('Narzędzia'), width=len(tr('Narzędzia')) + 1)
         menu = tk.Menu(tools, tearoff=False)
         self.fill_menu(menu, ((tr('Ustaw równoległość w Ollamie teraz (restart Ollamy)'),
                                lambda: self.apply_parallel(then_start=False)),
@@ -138,7 +144,7 @@ class QueueApp:
                               (tr('Co nowego (historia zmian)'), self.changelog_dialog)))
         tools["menu"] = menu
         tools.pack(side="left")
-        self.stop_btn = ttk.Button(bar, text=tr('■ Stop'), command=self.stop, state="disabled")
+        self.stop_btn = ttk.Button(bar, text=tr('■ Stop'), command=self.stop, state="disabled", style="Stop.TButton")
         self.stop_btn.pack(side="right")
         self.start_btn = ttk.Button(bar, text=tr('▶ Start'), command=self.start, style="Start.TButton")
         self.start_btn.pack(side="right", padx=(0, 6))
@@ -156,14 +162,17 @@ class QueueApp:
         left = ttk.Panedwindow(body, orient="vertical")
         body.add(left, weight=1)
 
-        qframe = ttk.Labelframe(left, text=tr('Kolejka'), padding=4, style="Head.TLabelframe")
+        qframe = ttk.Labelframe(left, text=tr('Kolejka'), padding=6, style="Head.TLabelframe")
         left.add(qframe, weight=3)
-        self.tree = ttk.Treeview(qframe, columns=("file", "dir", "track", "state"), show="headings",
+        self.tree = ttk.Treeview(qframe, columns=("prio", "file", "dir", "track", "state"), show="headings",
                                  selectmode="extended")
-        for col, text, width, stretch in (("file", tr("Plik"), 380, True), ("dir", tr("Folder"), 300, True),
-                                          ("track", tr("Napisy"), 70, False), ("state", tr("Stan"), 120, False)):
+        for col, text, width, stretch in (("prio", tr("Priorytet"), 90, False), ("file", tr("Plik"), 360, True),
+                                          ("dir", tr("Folder"), 280, True), ("track", tr("Napisy"), 70, False),
+                                          ("state", tr("Stan"), 120, False)):
             self.tree.heading(col, text=text)
-            self.tree.column(col, width=width, stretch=stretch)
+            self.tree.column(col, width=self.px(width), stretch=stretch)
+        self.tree.tag_configure("odd", background=self.C["stripe"])   # paski — najpierw, stany mają pierwszeństwo
+        self.tree.tag_configure("high", font=("Segoe UI Semibold", 10))
         for state, colors in self.STATE_COLORS.items():
             self.tree.tag_configure(state, **colors)
         scroll = ttk.Scrollbar(qframe, command=self.tree.yview)
@@ -173,17 +182,29 @@ class QueueApp:
         self.tree.bind("<Delete>", lambda e: self.remove())
         self.tree.bind("<Double-1>", lambda e: self.open_folder())
         self.tree.bind("<Button-3>", self.context_menu)
+        # przeciąganie wierszy myszą zmienia kolejność; Ctrl+strzałki / Ctrl+Home / Ctrl+End — z klawiatury
+        self.tree.bind("<ButtonPress-1>", self.drag_start, add="+")
+        self.tree.bind("<B1-Motion>", self.drag_motion, add="+")
+        self.tree.bind("<ButtonRelease-1>", self.drag_end, add="+")
+        for key, cmd in (("<Control-Up>", lambda: self.move(-1)), ("<Control-Down>", lambda: self.move(1)),
+                         ("<Control-Home>", self.move_top), ("<Control-End>", self.move_bottom)):
+            self.tree.bind(key, lambda e, cmd=cmd: (cmd(), "break")[1])
         self.row_menu = tk.Menu(root, tearoff=False)
         self.fill_menu(self.row_menu, ((tr('Otwórz folder'), self.open_folder),
                                        (tr('Ponów (ustaw jako oczekujące)'), self.requeue),
-                                       (tr('Wybierz ścieżkę napisów...'), self.track_dialog),
-                                       (tr('W górę'), lambda: self.move(-1)), (tr("W dół"), lambda: self.move(1)), None,
-                                       (tr('Usuń z kolejki'), self.remove)))
+                                       (tr('Wybierz ścieżkę napisów...'), self.track_dialog), None))
+        for prio, label in self.PRIORITIES.items():
+            self.row_menu.add_command(label=tr('Priorytet: {0}', tr(label)), command=lambda p=prio: self.prioritize(p))
+        self.row_menu.add_separator()
+        self.fill_menu(self.row_menu, ((tr('Na początek kolejki'), self.move_top), (tr('W górę'), lambda: self.move(-1)),
+                                       (tr("W dół"), lambda: self.move(1)), (tr('Na koniec kolejki'), self.move_bottom),
+                                       None, (tr('Usuń z kolejki'), self.remove)))
 
         lframe = ttk.Labelframe(left, text=tr('Dziennik'), padding=4, style="Head.TLabelframe")
         left.add(lframe, weight=1)
-        self.log = tk.Text(lframe, height=10, state="disabled", wrap="none", font=("Consolas", 9),
-                           relief="flat", background="#fbfbfb")
+        self.log = tk.Text(lframe, height=10, state="disabled", wrap="none", font=("Cascadia Mono", 9),
+                           relief="flat", background=self.C["card"], foreground="#374151", borderwidth=0,
+                           highlightthickness=0, padx=8, pady=6, selectbackground=self.C["select"])
         log_scroll = ttk.Scrollbar(lframe, command=self.log.yview)
         self.log.configure(yscrollcommand=log_scroll.set)
         log_scroll.pack(side="right", fill="y")
@@ -193,8 +214,8 @@ class QueueApp:
         body.add(side, weight=0)
 
         def group(title):
-            frame = ttk.Labelframe(side, text=title, padding=(10, 6), style="Head.TLabelframe")
-            frame.pack(fill="x", pady=(0, 8))
+            frame = ttk.Labelframe(side, text=title, padding=(10, 2, 10, 4), style="Head.TLabelframe")
+            frame.pack(fill="x", pady=(0, 6))
             frame.columnconfigure(1, weight=1)
             return frame
 
@@ -221,7 +242,7 @@ class QueueApp:
         par.grid(row=2, column=1, sticky="w", pady=2)
         ttk.Spinbox(par, from_=1, to=8, width=4, textvariable=self.parallel).pack(side="left")
         # ile zapytań naraz przyjmuje sama Ollama (OLLAMA_NUM_PARALLEL); przy Starcie wyrównywane do pola obok
-        self.server_par = ttk.Label(par, text="", foreground="#57606a")
+        self.server_par = ttk.Label(par, text="", style="Muted.TLabel")
         self.server_par.pack(side="left", padx=(8, 0))
         self.show_server_parallel()
         ttk.Label(g, text=tr('Z języka:')).grid(row=3, column=0, sticky="w")
@@ -294,14 +315,14 @@ class QueueApp:
 
         # ---- pasek stanu: postęp całej kolejki i bieżącego pliku
         foot = ttk.Frame(root, padding=(10, 6, 10, 10))
-        foot.pack(fill="x")
-        self.progress = ttk.Progressbar(foot, length=260, maximum=1)
+        foot.pack(side="bottom", fill="x", before=body)   # pasek stanu zawsze widoczny, nawet w niskim oknie
+        self.progress = ttk.Progressbar(foot, length=self.px(260), maximum=1)
         self.progress.pack(side="left")
         self.status = ttk.Label(foot, text=tr('Dodaj pliki lub foldery do kolejki.'))
         self.status.pack(side="left", padx=10)
-        self.file_progress = ttk.Label(foot, text="", foreground="#0b5cad")
+        self.file_progress = ttk.Label(foot, text="", foreground=self.C["accent"])
         self.file_progress.pack(side="right")
-        self.eta = ttk.Label(foot, text="", foreground="#57606a")
+        self.eta = ttk.Label(foot, text="", style="Muted.TLabel")
         self.eta.pack(side="right", padx=(0, 16))
 
         if not models:
@@ -312,6 +333,99 @@ class QueueApp:
             root.after(1500, self.start)
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(100, self.poll)
+
+    # jasny, płaski wygląd: karty na szarym tle, niebieski akcent (motyw "clam" — działa wszędzie bez dodatków)
+    C = {"bg": "#f3f4f6", "card": "#ffffff", "text": "#1f2937", "muted": "#6b7280", "accent": "#2563eb",
+         "accent_hover": "#1d4ed8", "border": "#e5e7eb", "select": "#dbeafe", "stripe": "#f9fafb", "hover": "#eef2ff"}
+
+    def px(self, n):
+        """Wymiar w pikselach przeliczony na skalowanie ekranu."""
+        return int(round(n * getattr(self, "scale", 1.0)))
+
+    def apply_theme(self, style):
+        c, font, px = self.C, ("Segoe UI", 10), self.px
+        style.theme_use("clam")
+        self.root.configure(background=c["bg"])
+        for opt, value in (("*Menu.background", c["card"]), ("*Menu.foreground", c["text"]),
+                           ("*Menu.activeBackground", c["select"]), ("*Menu.activeForeground", c["text"]),
+                           ("*Menu.relief", "flat"), ("*Menu.font", font), ("*Toplevel.background", c["bg"]),
+                           ("*TCombobox*Listbox.background", c["card"]), ("*TCombobox*Listbox.font", font),
+                           ("*TCombobox*Listbox.selectBackground", c["select"]),
+                           ("*TCombobox*Listbox.selectForeground", c["text"])):
+            self.root.option_add(opt, value)
+        style.configure(".", background=c["bg"], foreground=c["text"], font=font, bordercolor=c["border"],
+                        lightcolor=c["bg"], darkcolor=c["bg"], troughcolor=c["border"], focuscolor=c["accent"],
+                        selectbackground=c["select"], selectforeground=c["text"], insertcolor=c["text"])
+        style.configure("TButton", background=c["card"], padding=(10, 5), relief="flat", borderwidth=1,
+                        lightcolor=c["card"], darkcolor=c["card"])
+        style.map("TButton", background=[("disabled", c["bg"]), ("pressed", c["select"]), ("active", c["hover"])],
+                  foreground=[("disabled", "#9ca3af")], bordercolor=[("active", "#c7d2fe")])
+        style.configure("Start.TButton", background=c["accent"], foreground="#ffffff", font=("Segoe UI", 10, "bold"),
+                        padding=(18, 5), bordercolor=c["accent"], lightcolor=c["accent"], darkcolor=c["accent"])
+        style.map("Start.TButton", background=[("disabled", "#93c5fd"), ("pressed", "#1e40af"),
+                                               ("active", c["accent_hover"])],
+                  foreground=[("disabled", "#ffffff")], bordercolor=[("active", c["accent_hover"])])
+        style.configure("Stop.TButton", foreground="#b91c1c")
+        style.configure("Icon.TButton", padding=(6, 5))
+        style.configure("TMenubutton", background=c["card"], padding=(10, 5), relief="flat", borderwidth=1,
+                        arrowcolor=c["muted"])
+        style.map("TMenubutton", background=[("active", c["hover"])])
+        style.configure("Head.TLabelframe", background=c["bg"], bordercolor="#d1d5db", relief="solid",
+                        borderwidth=1, lightcolor=c["bg"], darkcolor=c["bg"])
+        style.configure("Head.TLabelframe.Label", background=c["bg"], foreground=c["accent"],
+                        font=("Segoe UI Semibold", 10))
+        for name in ("Card.TFrame", "Card.TLabel", "Card.TCheckbutton"):
+            style.configure(name, background=c["card"])
+        style.configure("Muted.TLabel", foreground=c["muted"])
+        style.configure("Card.Muted.TLabel", background=c["card"], foreground=c["muted"])
+        style.map("Card.TCheckbutton", background=[("active", c["card"])])
+        style.configure("TCheckbutton", indicatorbackground=c["card"], indicatorforeground="#ffffff",
+                        indicatorrelief="flat", indicatormargin=(0, 0, 6, 0), padding=1)
+        style.map("TCheckbutton", indicatorbackground=[("selected", c["accent"]), ("active", c["hover"])],
+                  background=[("active", c["bg"])])
+        for name in ("TCombobox", "TEntry", "TSpinbox"):
+            style.configure(name, fieldbackground=c["card"], background=c["card"], arrowcolor=c["muted"],
+                            padding=3, lightcolor=c["card"], darkcolor=c["card"])
+            style.map(name, bordercolor=[("focus", c["accent"])], lightcolor=[("focus", c["accent"])],
+                      fieldbackground=[("readonly", c["card"])])
+        style.configure("Treeview", background=c["card"], fieldbackground=c["card"], foreground=c["text"],
+                        rowheight=px(28), borderwidth=0, relief="flat")
+        style.map("Treeview", background=[("selected", c["select"])], foreground=[("selected", c["text"])])
+        style.configure("Treeview.Heading", background=c["stripe"], foreground=c["muted"], relief="flat",
+                        font=("Segoe UI Semibold", 9), padding=(px(8), px(6)), borderwidth=0)
+        style.map("Treeview.Heading", background=[("active", c["hover"])])
+        style.configure("TProgressbar", background=c["accent"], troughcolor=c["border"], thickness=px(8),
+                        bordercolor=c["border"], lightcolor=c["accent"], darkcolor=c["accent"])
+        style.configure("TScrollbar", background="#d1d5db", troughcolor=c["card"], bordercolor=c["card"],
+                        arrowcolor=c["muted"], lightcolor="#d1d5db", darkcolor="#d1d5db", gripcount=0)
+        style.map("TScrollbar", background=[("active", "#9ca3af")])
+        style.configure("TPanedwindow", background=c["bg"])
+        style.configure("Sash", sashthickness=px(8), background=c["bg"], lightcolor=c["bg"], darkcolor=c["bg"])
+        style.configure("TSeparator", background=c["border"])
+
+    # ---- priorytety: wyższy idzie pierwszy, w obrębie priorytetu — kolejność w tabeli
+    PRIORITIES = {1: "▲ wysoki", 0: "normalny", -1: "▼ niski"}
+
+    def set_prio(self, item, prio):
+        prio = prio if prio in self.PRIORITIES else 0
+        if prio:
+            self.prios[item] = prio
+        else:
+            self.prios.pop(item, None)
+        self.tree.set(item, "prio", tr(self.PRIORITIES[prio]))
+
+    def prioritize(self, prio):
+        for item in self.tree.selection():
+            self.set_prio(item, prio)
+        self.update_status()
+
+    def new_row(self, path, state=None, prio=0):
+        """Nowy wiersz kolejki dla pliku (na końcu tabeli)."""
+        path = Path(path)
+        item = self.tree.insert("", "end", values=("", path.name, str(path.parent), "", ""))
+        self.set_state(item, state or self.WAITING)
+        self.set_prio(item, prio)
+        return item
 
     def state_of(self, item):
         return self.states.get(item, self.WAITING)
@@ -404,7 +518,7 @@ class QueueApp:
         text = changelog_text()
         win = self.log_win = tk.Toplevel(self.root)
         win.title(tr('Co nowego — MKV Translator {0}', VERSION))
-        win.geometry("820x620")
+        win.geometry(f"{self.px(820)}x{self.px(620)}")
         win.transient(self.root)
         frame = ttk.Frame(win, padding=8)
         frame.pack(fill="both", expand=True)
@@ -515,8 +629,7 @@ class QueueApp:
                 f = f.resolve()
                 if str(f) not in queued and f.suffix.lower() in SUB_EXTS | VIDEO_EXTS:
                     queued.add(str(f))
-                    item = self.tree.insert("", "end", values=(f.name, str(f.parent), "", ""))
-                    self.set_state(item, self.WAITING)
+                    item = self.new_row(f)
                     self.set_track(item, None)
                     self.roots[item] = str(root)
         self.update_status()
@@ -613,7 +726,46 @@ class QueueApp:
             index = self.tree.index(item) + step
             if 0 <= index < len(self.tree.get_children()):
                 self.tree.move(item, "", index)
-        self.save_queue()
+        if items:
+            self.tree.see(items[0])
+        self.update_status()
+
+    def move_to(self, index):
+        """Przenosi zaznaczone wiersze (z zachowaniem ich kolejności) na pozycję index."""
+        items = [i for i in self.tree.get_children() if i in self.tree.selection()]
+        for n, item in enumerate(items):
+            self.tree.move(item, "", index + n if index >= 0 else "end")
+        if items:
+            self.tree.see(items[0])
+        self.update_status()
+
+    def move_top(self):
+        self.move_to(0)
+
+    def move_bottom(self):
+        self.move_to(-1)
+
+    def drag_start(self, event):
+        row = self.tree.identify_row(event.y)
+        self.drag = row if row and self.tree.identify_region(event.x, event.y) == "cell" else None
+
+    def drag_motion(self, event):
+        if not self.drag:
+            return
+        target = self.tree.identify_row(event.y)
+        if target and target not in self.tree.selection():
+            self.tree.configure(cursor="fleur")
+            items = [i for i in self.tree.get_children() if i in self.tree.selection()]
+            index = self.tree.index(target)
+            for n, item in enumerate(items):
+                self.tree.move(item, "", index + n if index < self.tree.index(items[0]) else index)
+            self.tree.see(target)
+
+    def drag_end(self, event):
+        if self.drag:
+            self.tree.configure(cursor="")
+            self.drag = None
+            self.update_status()
 
     def requeue(self):
         """Ustawia zaznaczone pliki z powrotem jako oczekujące (np. żeby przetłumaczyć je ponownie)."""
@@ -724,7 +876,7 @@ class QueueApp:
                  for i in self.tree.get_children() if i != self.current}
         win = tk.Toplevel(self.root)
         win.title(tr('Nazwy w formacie Plex'))
-        win.geometry("1180x560")
+        win.geometry(f"{self.px(1180)}x{self.px(560)}")
         win.transient(self.root)
         top = ttk.Frame(win, padding=8)
         top.pack(fill="x")
@@ -824,17 +976,20 @@ class QueueApp:
             path = Path(entry["path"])
             # plik przetwarzany w chwili zamknięcia programu traktujemy jak przerwany
             state = "Przerwano" if entry.get("state") == self.RUNNING else entry.get("state", self.WAITING)
-            item = self.tree.insert("", "end", values=(path.name, str(path.parent), "", ""))
-            self.set_state(item, state)
+            item = self.new_row(path, state, entry.get("priority", 0))
             self.set_track(item, entry.get("track"))
             if entry.get("root"):
                 self.roots[item] = entry["root"]
+            if entry.get("mode") == "repair" and state == self.WAITING:
+                self.modes[item] = "repair"       # „od nowa” przetrwa zamknięcie programu
 
     def save_queue(self):
         if not self.queue_file:
             return
         items = [{"path": str(Path(self.tree.set(i, "dir")) / self.tree.set(i, "file")),
-                  "state": self.state_of(i), "root": self.roots.get(i), "track": self.tracks.get(i)}
+                  "state": self.state_of(i), "root": self.roots.get(i), "track": self.tracks.get(i),
+                  **({"mode": "repair"} if self.modes.get(i) == "repair" else {}),
+                  **({"priority": self.prios[i]} if self.prios.get(i) else {})}
                  for i in self.tree.get_children()]
         options = {name: self.safe_parallel() if name == "parallel" else getattr(self, name).get()
                    for name in self.SAVED_OPTIONS}   # puste pole "równolegle" nie może wywrócić zapisu
@@ -854,8 +1009,11 @@ class QueueApp:
     def update_status(self):
         self.save_queue()
         items = self.tree.get_children()
-        for item in items:                    # kolor wiersza według stanu
-            self.tree.item(item, tags=(self.state_of(item),))
+        for n, item in enumerate(items):      # kolor wiersza według stanu, paski co drugi wiersz
+            state = self.state_of(item)
+            tags = [state] + (["odd"] if n % 2 and state != self.RUNNING else []) \
+                + (["high"] if self.prios.get(item, 0) > 0 and state == self.WAITING else [])
+            self.tree.item(item, tags=tags)
         states = [self.state_of(i) for i in items]
         counts = {s: states.count(s) for s in set(states)}
         parts = [tr('w kolejce {0}', len(states))]
@@ -941,7 +1099,7 @@ class QueueApp:
             groups.setdefault(str(Path(path).parent), []).append((path, locate_done(path), date))
         win = tk.Toplevel(self.root)
         win.title(tr('Seriale tłumaczone ze słuchu'))
-        win.geometry("1000x560")
+        win.geometry(f"{self.px(1000)}x{self.px(560)}")
         win.transient(self.root)
         frame = ttk.Frame(win, padding=10)
         frame.pack(fill="both", expand=True)
@@ -1125,8 +1283,10 @@ class QueueApp:
         print(tr('\nZatrzymuję po bieżącym fragmencie...'))
 
     def next(self):
-        """Uruchamia pierwszy oczekujący plik — kolejkę można zmieniać w trakcie pracy."""
-        item = next((i for i in self.tree.get_children() if self.state_of(i) == self.WAITING), None)
+        """Uruchamia następny oczekujący plik: najwyższy priorytet, a w nim pierwszy w tabeli
+        — kolejkę można zmieniać w trakcie pracy."""
+        waiting = [i for i in self.tree.get_children() if self.state_of(i) == self.WAITING]
+        item = max(waiting, key=lambda i: self.prios.get(i, 0)) if waiting else None
         if item is None or cancel.is_set():
             self.running, self.current = False, None
             self.start_btn.configure(state="normal")
@@ -1276,6 +1436,12 @@ def run_gui(paths):
         set_ui_lang(json.loads(queue_file.read_text(encoding="utf-8")).get("options", {}).get("ui_lang", "pl"))
     except (OSError, ValueError):
         pass
+    if os.name == "nt":                       # ostre litery przy skalowaniu ekranu 125–200% (bez rozmycia przez Windows)
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            pass
     root = tk.Tk()
     QueueApp(root, paths, queue_file)
     root.mainloop()

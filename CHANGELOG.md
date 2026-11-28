@@ -4,6 +4,18 @@ Format według [Keep a Changelog](https://keepachangelog.com/pl/1.1.0/). Wersje 
 
 ## [Niewydane]
 
+## [1.8] — 2026-11-28
+
+### Dodane
+
+- Priorytety w kolejce: wysoki / normalny / niski (przycisk „Priorytet” i menu pod prawym przyciskiem). Następny plik to ten o najwyższym priorytecie, a wśród równych — pierwszy w tabeli. Priorytet zapisuje się z kolejką.
+- Zmiana kolejności: przeciąganie wierszy myszą, przyciski ⤒ ▲ ▼ ⤓ (na początek, w górę, w dół, na koniec), Ctrl+↑/↓/Home/End.
+- Tryb „tłumacz od nowa” (z „Popraw oznaczone” i „Seriale tłumaczone ze słuchu”) zapisuje się z kolejką i przetrwa zamknięcie programu.
+
+### Zmienione
+
+- Nowy wygląd okna: jasny, płaski, z niebieskim akcentem, paskami w tabeli i wyraźniejszymi nagłówkami; ostre litery przy skalowaniu ekranu 125–200%. Pasek stanu jest zawsze widoczny.
+
 ## [1.7] — 2026-11-28
 
 ### Dodane
